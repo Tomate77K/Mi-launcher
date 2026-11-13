@@ -1,0 +1,14 @@
+# Datos del launcher y sesiones: nunca subir
+.mi_launcher/
+config.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build de PyInstaller
+build/
+dist/
+*.spec
