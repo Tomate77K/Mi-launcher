@@ -1,0 +1,12 @@
+{
+  "instances": [
+    {
+      "id": "mi-modpack",
+      "name": "Prueba",
+      "summary": "Descripción corta que verán tus amigos.",
+      "version": "0.1",
+      "mrpack_url": "https://github.com/Tomate77K/Mi-launcher/releases/download/0.1/Tomatin.1.0.0.mrpack",
+      "ram_mb": 4096
+    }
+  ]
+}
