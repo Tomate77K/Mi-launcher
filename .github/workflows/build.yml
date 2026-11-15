@@ -8,6 +8,7 @@ on:
       - "launcher.py"
       - "requirements.txt"
       - "icon.ico"
+      - "installer.iss"
       - "fonts/**"
   workflow_dispatch:
 
@@ -50,6 +51,13 @@ jobs:
           --version-file version_info.txt
           --collect-submodules minecraft_launcher_lib --collect-data certifi launcher.py
 
+      - name: Compilar el instalador
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Publicar la release y actualizar latest.json
         shell: pwsh
         env:
@@ -61,9 +69,9 @@ jobs:
 
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag dist/client.exe --clobber
+            gh release upload $tag dist/client.exe installer_out/77K-client-setup.exe --clobber
           } else {
-            gh release create $tag dist/client.exe --title "77K client $v" --notes "Versión $v"
+            gh release create $tag dist/client.exe installer_out/77K-client-setup.exe --title "77K client $v" --notes "Versión $v"
           }
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
