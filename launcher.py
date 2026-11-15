@@ -60,7 +60,7 @@ SSL_CONTEXT = make_ssl_context()
 BRAND_LOGO = "77K"
 BRAND_NAME = "client"
 LAUNCHER_NAME = f"{BRAND_LOGO} {BRAND_NAME}"
-LAUNCHER_VERSION = "0.7"
+LAUNCHER_VERSION = "0.8"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -1541,6 +1541,8 @@ class MainWindow(Background):
 
     # ---------------------------------------------------------- acceso directo
     def _offer_shortcut(self):
+        if (Path(sys.executable).parent / "unins000.exe").exists():
+            return                      # instalado con el instalador: ya ofreció el acceso directo
         if self.cfg.get("shortcut_asked"):
             return
         self.cfg["shortcut_asked"] = True
