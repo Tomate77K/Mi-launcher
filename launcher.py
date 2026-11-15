@@ -9,11 +9,14 @@ Fuente opcional: pon un .ttf estilo Minecraft en una carpeta "fonts" junto a est
 """
 
 import base64
+import colorsys
 import copy
 import hashlib
 import json
+import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -26,10 +29,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QObject, QPoint, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import (QEasingCurve, QObject, QParallelAnimationGroup, QPoint, QPropertyAnimation,
+                            QRectF, QSize, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QImage,
-                           QLinearGradient, QPainter, QPainterPath, QPixmap, QRadialGradient)
-from PySide6.QtWidgets import (QApplication, QDialog, QDoubleSpinBox, QFrame,
+                           QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient)
+from PySide6.QtWidgets import (QApplication, QColorDialog, QDialog, QDoubleSpinBox, QFrame,
                                QGraphicsDropShadowEffect, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
                                QPushButton, QRadioButton, QScrollArea, QSlider, QVBoxLayout,
@@ -37,10 +41,30 @@ from PySide6.QtWidgets import (QApplication, QDialog, QDoubleSpinBox, QFrame,
 
 import minecraft_launcher_lib as mll
 
+try:
+    import certifi
+except ImportError:      # sin certifi se usan los certificados del sistema
+    certifi = None
+
+
+def make_ssl_context() -> ssl.SSLContext:
+    """Contexto https con los certificados que lleva el propio launcher (certifi).
+    Así funciona también en PCs sin Python instalado, donde faltan certificados."""
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
+SSL_CONTEXT = make_ssl_context()
+
 BRAND_LOGO = "77K"
 BRAND_NAME = "client"
 LAUNCHER_NAME = f"{BRAND_LOGO} {BRAND_NAME}"
-LAUNCHER_VERSION = "0.6"
+LAUNCHER_VERSION = "0.7"
+
+# Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
+UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
+UPDATE_URL_PREFIX = "https://github.com/Tomate77K/"      # el .exe nuevo solo se baja de aquí
 
 # Lista de instancias. Es un archivo instances.json en tu repositorio de GitHub (ver README).
 MANIFEST_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/instances.json"
@@ -81,16 +105,55 @@ DEFAULT_CONFIG = {
     "last_instance": None,
     "client_id": "",
     "account": None,
+    "shortcut_asked": False,    # ya se ofreció crear el acceso directo
+    "theme": "#8b2fe0",         # color principal elegido en Personalización
 }
 
 # ----------------------------------------------------------------- apariencia
-COLORS = {
-    "TEXT": "#f3e8ff",
-    "MUTED": "#a78bcb",
-    "ACCENT": "#8b2fe0",
-    "ACCENT_HOVER": "#a24df0",
-    "ACCENT_DISABLED": "#3b2a52",
-}
+DEFAULT_THEME = "#8b2fe0"
+
+
+def make_palette(hex_color: str) -> dict:
+    """Calcula todos los colores de la interfaz a partir de un único color principal."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[k:k + 2], 16) / 255 for k in (0, 2, 4))
+    except (ValueError, IndexError):
+        return make_palette(DEFAULT_THEME)
+    hue, light, sat = colorsys.rgb_to_hls(r, g, b)
+
+    def col(l, s, hh=hue):
+        rr, gg, bb = colorsys.hls_to_rgb(hh, max(0.0, min(1.0, l)), max(0.0, min(1.0, s)))
+        return (round(rr * 255), round(gg * 255), round(bb * 255))
+
+    def hx(c):
+        return "#%02x%02x%02x" % c
+
+    def rgb(c):
+        return "%d, %d, %d" % c
+
+    l = min(max(light, 0.32), 0.62)           # evita acentos casi negros o casi blancos
+    accent = col(l, sat)
+    return {
+        "ACCENT": hx(accent),
+        "ACCENT_HOVER": hx(col(l + 0.08, sat)),
+        "ACCENT_PRESSED": hx(col(l - 0.08, sat)),
+        "ACCENT_DISABLED": hx(col(0.22, sat * 0.4)),
+        "DIS_TEXT": hx(col(0.50, sat * 0.3)),
+        "TEXT": hx(col(0.95, sat * 0.8)),
+        "MUTED": hx(col(0.72, sat * 0.5)),
+        "SUB": hx(col(0.80, sat * 0.7)),
+        "AC": rgb(accent),
+        "LI": rgb(col(0.72, sat)),
+        "DK": rgb(col(0.06, sat * 0.6)),
+        "DLG": hx(col(0.08, sat * 0.6)),
+        "MENU": hx(col(0.11, sat * 0.6)),
+        # No son textos de la hoja de estilo, los usa el fondo y el brillo del título
+        "bg_bottom": col(0.30, sat),
+        "bg_glow": col(0.50, sat),
+        "title_glow": col(0.60, sat),
+    }
+
 
 QSS = """
 QWidget { color: @TEXT@; font-size: 14px; }
@@ -100,8 +163,8 @@ QLabel#head { font-size: 17px; font-weight: @BOLD@; }
 QLabel#muted { color: @MUTED@; font-size: 13px; }
 
 QFrame#card {
-    background-color: rgba(14, 8, 24, 175);
-    border: 1px solid rgba(170, 100, 255, 70);
+    background-color: rgba(@DK@, 175);
+    border: 1px solid rgba(@LI@, 70);
     border-radius: 24px;
 }
 
@@ -110,28 +173,27 @@ QPushButton {
     padding: 11px 24px; font-weight: @BOLD@;
 }
 QPushButton:hover { background-color: @ACCENT_HOVER@; }
-QPushButton:pressed { background-color: #7425c4; }
-QPushButton:disabled { background-color: @ACCENT_DISABLED@; color: #8b7aa3; }
+QPushButton:pressed { background-color: @ACCENT_PRESSED@; }
+QPushButton:disabled { background-color: @ACCENT_DISABLED@; color: @DIS_TEXT@; }
 QPushButton[variant="ghost"] { background-color: rgba(255, 255, 255, 18); color: @TEXT@; padding: 10px 18px; }
 QPushButton[variant="ghost"]:hover { background-color: rgba(255, 255, 255, 36); }
-QPushButton[variant="ghost"]:disabled { background-color: rgba(255, 255, 255, 8); color: #6b5a82; }
+QPushButton[variant="ghost"]:disabled { background-color: rgba(255, 255, 255, 8); color: @DIS_TEXT@; }
 QPushButton#play { padding: 13px 38px; font-size: 16px; }
 QPushButton#gear { background-color: rgba(255, 255, 255, 22); border-radius: 23px; padding: 0; font-size: 24px; }
 QPushButton#gear:hover { background-color: @ACCENT@; }
 QPushButton#more { background-color: rgba(255, 255, 255, 18); border-radius: 14px; padding: 0; font-size: 22px; }
 QPushButton#more:hover { background-color: rgba(255, 255, 255, 40); }
 QPushButton#avatar {
-    background-color: rgba(255, 255, 255, 22); border: 1px solid rgba(170, 100, 255, 80);
+    background-color: rgba(255, 255, 255, 22); border: 1px solid rgba(@LI@, 80);
     border-radius: 18px; padding: 0;
 }
 QPushButton#avatar:hover { background-color: rgba(255, 255, 255, 44); }
 
 QPushButton#tile {
-    background-color: rgba(139, 47, 224, 55); border: 2px solid transparent;
+    background-color: rgba(@AC@, 55); border: 2px solid transparent;
     border-radius: 18px; padding: 0; font-size: 26px; color: @TEXT@;
 }
-QPushButton#tile:hover { background-color: rgba(139, 47, 224, 115); }
-QPushButton#tile[needs="true"] { border: 2px dashed rgba(200, 150, 255, 110); }
+QPushButton#tile:hover { background-color: rgba(@AC@, 115); }
 QPushButton#tile:checked { border: 2px solid @ACCENT_HOVER@; }
 
 QScrollArea { background: transparent; border: none; }
@@ -141,42 +203,52 @@ QProgressBar { background-color: rgba(255, 255, 255, 24); border: none; border-r
 QProgressBar::chunk { background-color: @ACCENT@; border-radius: 4px; }
 
 QLineEdit, QDoubleSpinBox {
-    background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(170, 100, 255, 70);
+    background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
     border-radius: 12px; padding: 8px 12px; selection-background-color: @ACCENT@;
+}
+QLabel#value {
+    background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
+    border-radius: 12px; padding: 8px 12px; font-weight: @BOLD@;
 }
 QSlider::groove:horizontal { height: 8px; background: rgba(255, 255, 255, 30); border-radius: 4px; }
 QSlider::sub-page:horizontal { background: @ACCENT@; border-radius: 4px; }
 QSlider::handle:horizontal { width: 22px; height: 22px; margin: -8px 0; border-radius: 11px; background: #ffffff; }
 
-QDialog, QMessageBox, QInputDialog { background-color: #120a1f; }
+QDialog, QMessageBox, QInputDialog { background-color: @DLG@; }
 QPlainTextEdit {
-    background-color: #0a0612; border: 1px solid rgba(170, 100, 255, 70); border-radius: 14px;
+    background-color: #0a0612; border: 1px solid rgba(@LI@, 70); border-radius: 14px;
     padding: 8px; font-family: Consolas, "Courier New", monospace; font-size: 12px;
 }
 QRadioButton { spacing: 10px; padding: 4px 0; }
 
-QMenu { background-color: #160c26; border: 1px solid rgba(170, 100, 255, 90); border-radius: 14px; padding: 8px; }
-QMenu::item { padding: 9px 26px; border-radius: 9px; }
+QMenu { background-color: @MENU@; border: 1px solid rgba(@LI@, 90); border-radius: 14px; padding: 8px; }
+QMenu::item { padding: 10px 22px 10px 12px; margin: 1px 0; border-radius: 10px; }
+QMenu::icon { padding-left: 8px; }
+QMenu::separator { height: 1px; background: rgba(255, 255, 255, 28); margin: 6px 14px; }
 QMenu::item:selected { background-color: @ACCENT@; }
-QMenu::item:disabled { color: #6b5a82; }
+QMenu::item:disabled { color: @DIS_TEXT@; }
 
 QToolTip {
-    background-color: #160c26; color: @TEXT@; border: 1px solid rgba(170, 100, 255, 90);
+    background-color: @MENU@; color: @TEXT@; border: 1px solid rgba(@LI@, 90);
     padding: 6px 10px;
 }
 
+QScrollBar:horizontal { background: transparent; height: 8px; margin: 1px; }
+QScrollBar::handle:horizontal { background: rgba(@LI@, 110); border-radius: 3px; min-width: 30px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical { background: rgba(170, 100, 255, 110); border-radius: 4px; min-height: 30px; }
+QScrollBar::handle:vertical { background: rgba(@LI@, 110); border-radius: 4px; min-height: 30px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 """
 
 # Fuentes estilo Minecraft que se usan si están instaladas o en la carpeta "fonts"
-FONT_CANDIDATES = ("monocraft", "minecraft", "minecraftia", "minecrafter")
+FONT_CANDIDATES = ("poppins", "monocraft", "minecraft", "minecraftia", "minecrafter")
 
 
-def build_qss(pixel_font: bool) -> str:
-    values = dict(COLORS)
+def build_qss(pixel_font: bool, pal: dict) -> str:
+    values = {k: v for k, v in pal.items() if isinstance(v, str)}
     values["BOLD"] = "normal" if pixel_font else "bold"   # las fuentes pixeladas se ven mal en negrita
     qss = QSS
     for key, val in values.items():
@@ -202,32 +274,68 @@ def load_fonts() -> tuple[str, bool]:
     for cand in FONT_CANDIDATES:
         for fam in available:
             if fam.lower().startswith(cand):
-                return fam, True
+                return fam, cand != "poppins"      # solo las fuentes pixeladas llevan ajustes
     return "", False
 
 
 class Background(QWidget):
-    """Fondo: degradado negro (arriba) a morado (abajo) con brillos difuminados."""
+    """Fondo: degradado vertical, negro arriba y color del tema abajo."""
+
+    bg_bottom = (96, 30, 150)
+    bg_glow = (150, 60, 220)
 
     def paintEvent(self, _event):
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
         grad = QLinearGradient(0, 0, 0, h)
         grad.setColorAt(0.0, QColor(0, 0, 0))
-        grad.setColorAt(0.45, QColor(14, 5, 26))
-        grad.setColorAt(1.0, QColor(96, 30, 150))
+        grad.setColorAt(0.30, QColor(0, 0, 0))
+        grad.setColorAt(1.0, QColor(*self.bg_bottom))
         p.fillRect(self.rect(), grad)
 
-        for cx, cy, radius, rgb, alpha in (
-            (0.10 * w, 1.05 * h, 0.60 * w, (165, 60, 235), 150),
-            (0.88 * w, 1.00 * h, 0.55 * w, (120, 40, 205), 130),
-        ):
-            glow = QRadialGradient(cx, cy, radius)
-            glow.setColorAt(0.0, QColor(*rgb, alpha))
-            glow.setColorAt(1.0, QColor(*rgb, 0))
-            p.fillRect(self.rect(), glow)
+        # brillo suave y simétrico en la parte baja
+        glow = QRadialGradient(w / 2, h * 1.05, w * 0.7)
+        glow.setColorAt(0.0, QColor(*self.bg_glow, 80))
+        glow.setColorAt(1.0, QColor(*self.bg_glow, 0))
+        p.fillRect(self.rect(), glow)
+        p.end()
+
+
+class TileButton(QPushButton):
+    """Cuadrado de instancia. Gris mientras no está instalada; al descargarse se va llenando
+    de color de abajo hacia arriba."""
+
+    accent = QColor(162, 77, 240)       # color del borde de selección (lo fija el tema)
+
+    def __init__(self):
+        super().__init__()
+        self._progress = -1.0       # -1 = a todo color; 0 = todo gris; entre 0 y 1 = descargando
+
+    def set_progress(self, value: float):
+        self._progress = value
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        gray = 0.0 <= self._progress < 1.0
+        if not gray and not self.isChecked():
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect())
+        if gray:
+            clip = QPainterPath()
+            clip.addRoundedRect(rect, 18, 18)
+            p.save()
+            p.setClipPath(clip)
+            gray_h = self.height() * (1.0 - self._progress)
+            p.fillRect(QRectF(0, 0, self.width(), gray_h), QColor(70, 70, 76, 185))
+            p.restore()
+        if self.isChecked():                # el borde de selección siempre queda por encima
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(self.accent, 2))
+            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 17, 17)
         p.end()
 
 
@@ -360,7 +468,7 @@ def pick_skin_url(login_data: dict) -> str:
 
 def fetch_json(url: str, timeout: int = 15):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -373,7 +481,7 @@ def download_small(url: str, dest: Path, host: str | None = None, max_bytes: int
         raise ValueError("URL no permitida")
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as resp:
         data = resp.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise ValueError("archivo demasiado grande")
@@ -401,7 +509,7 @@ def download_file(url: str, dest: Path, cb: dict, sha256: str = "") -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     digest = hashlib.sha256()
-    with urllib.request.urlopen(req, timeout=30) as resp, open(dest, "wb") as out:
+    with urllib.request.urlopen(req, timeout=30, context=SSL_CONTEXT) as resp, open(dest, "wb") as out:
         total = int(resp.headers.get("Content-Length") or 0)
         cb["setMax"](total or 1)
         done = 0
@@ -419,6 +527,85 @@ def download_file(url: str, dest: Path, cb: dict, sha256: str = "") -> None:
         raise RuntimeError("La descarga no coincide con el sha256 del catálogo (archivo corrupto o cambiado).")
 
 
+JAVA_RUNTIMES = ("java-runtime-delta", "java-runtime-gamma")     # Java 21 y Java 17 de Mojang
+
+
+def ensure_java(cb: dict) -> None:
+    """Algunos instaladores (Forge, NeoForge) ejecutan Java mientras instalan. En un PC sin Java
+    fallaría con «FileNotFoundError». Se descarga el Java de Mojang y se pone al principio del PATH."""
+    for name in JAVA_RUNTIMES:
+        try:
+            exe = mll.runtime.get_executable_path(name, str(MC_DIR))
+            if not exe:
+                cb["setStatus"]("Preparando Java…")
+                mll.runtime.install_jvm_runtime(name, str(MC_DIR), callback=cb)
+                exe = mll.runtime.get_executable_path(name, str(MC_DIR))
+            if exe:
+                java_dir = str(Path(exe).parent)
+                paths = os.environ.get("PATH", "").split(os.pathsep)
+                if java_dir not in paths:
+                    os.environ["PATH"] = java_dir + os.pathsep + os.environ.get("PATH", "")
+                return
+        except Exception as e:
+            cb["setStatus"](f"No se pudo preparar {name} ({type(e).__name__})")
+
+
+def parse_version(value) -> tuple:
+    return tuple(int(n) for n in re.findall(r"\d+", str(value)))
+
+
+def parse_update(data) -> dict | None:
+    """Valida latest.json. Solo se acepta un .exe alojado en tu cuenta de GitHub."""
+    if not isinstance(data, dict):
+        return None
+    url = str(data.get("url", ""))
+    version = str(data.get("version", ""))
+    if not version or not url.startswith(UPDATE_URL_PREFIX):
+        return None
+    return {"version": version, "url": url, "sha256": str(data.get("sha256", "")).lower()}
+
+
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def swap_executable(new_path: Path) -> Path:
+    """Windows no deja borrar un .exe en uso, pero sí renombrarlo: el actual pasa a .old
+    y el nuevo ocupa su lugar. El .old se borra la próxima vez que se abre."""
+    exe = Path(sys.executable)
+    old = exe.with_name(exe.name + ".old")
+    old.unlink(missing_ok=True)
+    exe.rename(old)
+    try:
+        new_path.rename(exe)
+    except OSError:
+        old.rename(exe)           # si falla, se deja todo como estaba
+        raise
+    return exe
+
+
+def create_desktop_shortcut() -> bool:
+    """Crea «77K client» en el escritorio (también si está en OneDrive) apuntando a este .exe."""
+    if not (is_frozen() and sys.platform.startswith("win")):
+        return False
+    script = (
+        "$d=[Environment]::GetFolderPath('Desktop');"
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($d+'\\77K client.lnk');"
+        "$s.TargetPath=$env:K77_EXE;"
+        "$s.WorkingDirectory=Split-Path $env:K77_EXE;"
+        "$s.IconLocation=$env:K77_EXE+',0';"
+        "$s.Description='77K client';"
+        "$s.Save()"
+    )
+    env = dict(os.environ, K77_EXE=sys.executable)
+    try:
+        done = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                              env=env, creationflags=0x08000000, timeout=30, capture_output=True)
+        return done.returncode == 0
+    except Exception:
+        return False
+
+
 def make_button(text: str, ghost: bool = False, name: str = "") -> QPushButton:
     btn = QPushButton(text)
     if ghost:
@@ -427,6 +614,74 @@ def make_button(text: str, ghost: bool = False, name: str = "") -> QPushButton:
         btn.setObjectName(name)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     return btn
+
+
+def play_open_animation(widget: QWidget, dy: int, ms: int) -> None:
+    """Aparece con fundido y un pequeño deslizamiento hacia su posición final."""
+    end = widget.pos()
+    widget.setWindowOpacity(0.0)
+    fade = QPropertyAnimation(widget, b"windowOpacity", widget)
+    fade.setDuration(ms)
+    fade.setStartValue(0.0)
+    fade.setEndValue(1.0)
+    fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+    slide = QPropertyAnimation(widget, b"pos", widget)
+    slide.setDuration(ms)
+    slide.setStartValue(end + QPoint(0, dy))
+    slide.setEndValue(end)
+    spring = QEasingCurve(QEasingCurve.Type.OutBack)      # pasa un poco y vuelve, como un resorte
+    spring.setOvershoot(1.6)
+    slide.setEasingCurve(spring)
+    group = QParallelAnimationGroup(widget)
+    group.addAnimation(fade)
+    group.addAnimation(slide)
+    widget._open_anim = group          # se guarda para que no lo borre el recolector
+    group.start()
+
+
+class FadeMenu(QMenu):
+    """Menú que se abre con una animación suave."""
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        play_open_animation(self, 14, 300)
+
+
+class FadeDialog(QDialog):
+    """Diálogo que se abre con una animación suave."""
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_shown_once", False):
+            self._shown_once = True
+            play_open_animation(self, 26, 380)
+
+    def hideEvent(self, event):
+        self._shown_once = False       # la próxima vez que se abra, vuelve a animarse
+        super().hideEvent(event)
+
+
+ICON_FONTS = ("Segoe Fluent Icons", "Segoe MDL2 Assets")     # iconos que trae Windows 10/11
+
+
+def glyph_icon(code: int, color: QColor) -> QIcon:
+    """Icono pequeño para los menús, dibujado con la fuente de iconos de Windows."""
+    families = set(QFontDatabase.families())
+    family = next((f for f in ICON_FONTS if f in families), "")
+    if not family:
+        return QIcon()
+    pm = QPixmap(32, 32)
+    pm.setDevicePixelRatio(2.0)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+    font = QFont(family)
+    font.setPixelSize(14)
+    p.setFont(font)
+    p.setPen(color)
+    p.drawText(QRectF(0, 0, 16, 16), Qt.AlignmentFlag.AlignCenter, chr(code))
+    p.end()
+    return QIcon(pm)
 
 
 def style_menu(menu: QMenu) -> None:
@@ -447,10 +702,13 @@ class Bus(QObject):
     avatar = Signal(str)         # ruta de la skin para el avatar ("" = silueta)
     error = Signal(str, str)     # título, mensaje
     log = Signal(str)
+    update_found = Signal(str, str, str)    # versión, url, sha256
+    upd_progress = Signal(int)
+    upd_done = Signal(str)                  # "" = bien; si no, el error
 
 
 # --------------------------------------------------------------------- diálogos
-class RamDialog(QDialog):
+class RamDialog(FadeDialog):
     def __init__(self, parent, name: str, mb: int):
         super().__init__(parent)
         self.setWindowTitle("Memoria RAM")
@@ -470,20 +728,16 @@ class RamDialog(QDialog):
         row.setSpacing(16)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(2, 64)                   # en medios GB: 1 a 32 GB
-        self.spin = QDoubleSpinBox()
-        self.spin.setRange(1.0, 32.0)
-        self.spin.setSingleStep(0.5)
-        self.spin.setDecimals(1)
-        self.spin.setSuffix(" GB")
-        self.spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.spin.setFixedWidth(110)
+        self.value_lbl = QLabel()                     # muestra el valor elegido
+        self.value_lbl.setObjectName("value")
+        self.value_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.value_lbl.setFixedWidth(110)
         gb = max(1.0, min(32.0, mb / 1024))
-        self.spin.setValue(gb)
         self.slider.setValue(int(round(gb * 2)))
-        self.slider.valueChanged.connect(self._from_slider)
-        self.spin.valueChanged.connect(self._from_spin)
+        self.slider.valueChanged.connect(self._show_value)
+        self._show_value(self.slider.value())
         row.addWidget(self.slider, 1)
-        row.addWidget(self.spin)
+        row.addWidget(self.value_lbl)
 
         hint = QLabel("Para la mayoría de modpacks, entre 4 y 6 GB va bien. "
                       "No uses casi toda la RAM de tu PC.")
@@ -506,21 +760,39 @@ class RamDialog(QDialog):
         lay.addSpacing(6)
         lay.addLayout(buttons)
 
-    def _from_slider(self, value: int):
-        self.spin.blockSignals(True)
-        self.spin.setValue(value / 2)
-        self.spin.blockSignals(False)
-
-    def _from_spin(self, value: float):
-        self.slider.blockSignals(True)
-        self.slider.setValue(int(round(value * 2)))
-        self.slider.blockSignals(False)
+    def _show_value(self, value: int):
+        self.value_lbl.setText(f"{value / 2:g} GB")
 
     def megabytes(self) -> int:
-        return int(round(self.spin.value() * 1024))
+        return int(round(self.slider.value() / 2 * 1024))
 
 
-class AccountDialog(QDialog):
+class UpdateDialog(FadeDialog):
+    def __init__(self, parent, version: str):
+        super().__init__(parent)
+        self.setWindowTitle("Actualización")
+        self.setModal(True)
+        self.setMinimumWidth(400)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 26, 28, 24)
+        lay.setSpacing(14)
+        head = QLabel(f"Actualizando a la versión {version}")
+        head.setObjectName("head")
+        note = QLabel("El launcher se reiniciará solo al terminar.")
+        note.setObjectName("muted")
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(8)
+        lay.addWidget(head)
+        lay.addWidget(note)
+        lay.addWidget(self.bar)
+
+    def reject(self):          # no se puede cerrar con Esc a mitad de la descarga
+        pass
+
+
+class AccountDialog(FadeDialog):
     def __init__(self, main: "MainWindow"):
         super().__init__(main)
         self.main = main
@@ -599,7 +871,7 @@ class AccountDialog(QDialog):
         self.accept()
 
 
-class LogsDialog(QDialog):
+class LogsDialog(FadeDialog):
     def __init__(self, main: "MainWindow"):
         super().__init__(main)
         self.main = main
@@ -658,6 +930,9 @@ class MainWindow(Background):
         self.catalog: dict[str, dict] = {}    # id -> entrada
         self.ids: list[str] = []              # instancias en el orden de la columna
         self.current: str | None = None       # instancia seleccionada
+        self.installing: str | None = None    # instancia que se está descargando
+        self.game_running = False             # Minecraft abierto (no se actualiza el launcher)
+        self.upd_dialog: UpdateDialog | None = None
         self.tiles: dict[str, QPushButton] = {}
         self.busy = False
         self.log_lines: deque = deque(maxlen=5000)
@@ -672,21 +947,41 @@ class MainWindow(Background):
         self.setMinimumSize(760, 480)
 
         self._build_ui()
+        self.apply_theme(self.cfg.get("theme", DEFAULT_THEME))
 
         self.bus.status.connect(self._on_status)
-        self.bus.percent.connect(self.progress.setValue)
+        self.bus.percent.connect(self._on_percent)
         self.bus.busy.connect(self._apply_busy)
         self.bus.catalog.connect(self._rebuild_catalog)
         self.bus.error.connect(self._show_error)
         self.bus.log.connect(self._store_log)
         self.bus.avatar.connect(self._set_avatar)
         self.bus.account.connect(self._update_avatar)
+        self.bus.update_found.connect(self._ask_update)
+        self.bus.upd_progress.connect(self._on_upd_progress)
+        self.bus.upd_done.connect(self._on_upd_done)
 
         self._set_avatar("")                  # silueta mientras carga el avatar
         self._load_cached_manifest()
         self._rebuild_catalog()
         self._update_avatar()
         self._fetch_catalog()
+        if is_frozen():                 # solo en la app compilada, no al probar con python
+            threading.Thread(target=self._check_update_worker, daemon=True).start()
+            QTimer.singleShot(1500, self._offer_shortcut)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_intro_done", False):
+            self._intro_done = True
+            intro = QPropertyAnimation(self, b"windowOpacity", self)
+            intro.setDuration(450)
+            intro.setStartValue(0.0)
+            intro.setEndValue(1.0)
+            intro.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self.setWindowOpacity(0.0)
+            self._intro_anim = intro
+            intro.start()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -694,18 +989,16 @@ class MainWindow(Background):
         root.setContentsMargins(30, 20, 30, 26)
         root.setSpacing(14)
 
-        # ---- barra superior: "77K client" de corrido y la tuerca
+        # ---- barra superior: "77K" y la tuerca
         top = QHBoxLayout()
-        title = QLabel(
-            f'<span style="font-size:54px;">{BRAND_LOGO}</span>'
-            f'<span style="font-size:26px; color:#cdb4f0;"> {BRAND_NAME}</span>')
+        title = QLabel()
         title.setObjectName("title")
         title.setTextFormat(Qt.TextFormat.RichText)
-        glow = QGraphicsDropShadowEffect(title)
-        glow.setBlurRadius(36)
-        glow.setOffset(0, 0)
-        glow.setColor(QColor(170, 70, 255, 210))
-        title.setGraphicsEffect(glow)
+        self.lbl_title = title
+        self.title_glow = QGraphicsDropShadowEffect(title)
+        self.title_glow.setBlurRadius(36)
+        self.title_glow.setOffset(0, 0)
+        title.setGraphicsEffect(self.title_glow)
 
         self.btn_gear = make_button("⚙", name="gear")
         self.btn_gear.setFixedSize(46, 46)
@@ -716,8 +1009,10 @@ class MainWindow(Background):
         top.addWidget(self.btn_gear, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(top)
 
-        # ---- cuerpo: columna de instancias a la izquierda, el resto vacío
+        # ---- cuerpo: columna de instancias a la izquierda (llega hasta abajo, al nivel de
+        #      Jugar y el avatar) y, a la derecha, un espacio libre con Jugar y el avatar abajo
         body = QHBoxLayout()
+        body.setSpacing(18)
         root.addLayout(body, 1)
 
         column = QFrame()
@@ -744,24 +1039,13 @@ class MainWindow(Background):
         col_lay.addWidget(self.tiles_area, 1)
         col_lay.addWidget(self.btn_more, 0, Qt.AlignmentFlag.AlignHCenter)
         body.addWidget(column)
-        body.addStretch(1)
 
-        # ---- barra inferior: estado, Jugar y avatar de la cuenta
+        right = QVBoxLayout()
+        right.addStretch(1)
         bottom = QHBoxLayout()
         bottom.setSpacing(14)
 
-        status_col = QVBoxLayout()
-        status_col.setSpacing(6)
-        self.lbl_status = QLabel("Listo")
-        self.lbl_status.setObjectName("muted")
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(8)
-        status_col.addWidget(self.lbl_status)
-        status_col.addWidget(self.progress)
-
-        self.btn_play = make_button("▶  Jugar", name="play")
+        self.btn_play = make_button("Jugar", name="play")
         self.btn_play.clicked.connect(self._play)
 
         self.btn_avatar = make_button("", name="avatar")
@@ -769,23 +1053,31 @@ class MainWindow(Background):
         self.btn_avatar.setIconSize(QSize(44, 44))
         self.btn_avatar.clicked.connect(self._open_account)
 
-        bottom.addLayout(status_col, 1)
+        bottom.addStretch(1)
         bottom.addWidget(self.btn_play, 0, Qt.AlignmentFlag.AlignVCenter)
         bottom.addWidget(self.btn_avatar, 0, Qt.AlignmentFlag.AlignVCenter)
-        root.addLayout(bottom)
+        right.addLayout(bottom)
+        body.addLayout(right, 1)
 
         # ---- menú de la tuerca
-        self.gear_menu = QMenu(self.btn_gear)
+        self.gear_menu = FadeMenu(self.btn_gear)
         style_menu(self.gear_menu)
-        self.gear_menu.addAction("Logs").triggered.connect(self._open_logs)
-        self.gear_menu.addAction("Memoria RAM (GB)").triggered.connect(self._open_ram)
+        soft = QColor(235, 225, 250, 220)
+        danger = QColor(255, 125, 135)
+        self.gear_menu.addAction(glyph_icon(0xE8A5, soft), "Logs").triggered.connect(self._open_logs)
+        self.gear_menu.addAction(glyph_icon(0xE9E9, soft), "Memoria RAM (GB)").triggered.connect(self._open_ram)
+        self.gear_menu.addSeparator()
+        self.gear_menu.addAction(glyph_icon(0xE790, soft), "Personalización").triggered.connect(self._open_theme)
+        if is_frozen():
+            self.gear_menu.addAction(glyph_icon(0xE718, soft), "Crear acceso directo").triggered.connect(self._make_shortcut)
 
         # ---- menú de los tres puntos (instancias)
-        self.more_menu = QMenu(self.btn_more)
+        self.more_menu = FadeMenu(self.btn_more)
         style_menu(self.more_menu)
-        self.act_refresh = self.more_menu.addAction("Actualizar lista")
-        self.act_folder = self.more_menu.addAction("Abrir carpeta")
-        self.act_uninstall = self.more_menu.addAction("Desinstalar")
+        self.act_refresh = self.more_menu.addAction(glyph_icon(0xE72C, soft), "Actualizar lista")
+        self.act_folder = self.more_menu.addAction(glyph_icon(0xE838, soft), "Abrir carpeta")
+        self.more_menu.addSeparator()
+        self.act_uninstall = self.more_menu.addAction(glyph_icon(0xE74D, danger), "Desinstalar")
         self.act_refresh.triggered.connect(self._fetch_catalog)
         self.act_folder.triggered.connect(self._open_folder)
         self.act_uninstall.triggered.connect(self._uninstall)
@@ -802,7 +1094,6 @@ class MainWindow(Background):
 
     # ---------------------------------------------------------- señales / estado
     def _on_status(self, text: str):
-        self.lbl_status.setText(text)
         self.bus.log.emit(f"[{LAUNCHER_NAME}] {text}")
 
     def _store_log(self, line: str):
@@ -815,24 +1106,71 @@ class MainWindow(Background):
         self.busy = busy
         for w in (self.btn_play, self.act_refresh, self.act_uninstall):
             w.setEnabled(not busy)
-        if not busy:
-            self.progress.setValue(0)
 
     def _make_callback(self) -> dict:
-        state = {"max": 1}
+        """Callbacks de progreso. El instalador tiene varias etapas (cada setMax empieza una);
+        se combinan en un único avance que nunca retrocede."""
+        state = {"max": 1, "stage": -1, "frac": 0.0}
+
+        def emit():
+            k = max(state["stage"], 0)
+            overall = 1.0 - (0.6 ** k) * (1.0 - 0.4 * state["frac"])
+            self.bus.percent.emit(min(99, int(overall * 100)))
 
         def set_max(m):
             state["max"] = max(int(m), 1)
-            self.bus.percent.emit(0)
+            state["stage"] += 1
+            state["frac"] = 0.0
+            emit()
 
         def set_progress(v):
-            self.bus.percent.emit(min(100, int(int(v) * 100 / state["max"])))
+            state["frac"] = min(1.0, int(v) / state["max"])
+            emit()
 
         return {
             "setStatus": lambda t: self.bus.status.emit(str(t)),
             "setMax": set_max,
             "setProgress": set_progress,
         }
+
+    def _base_progress(self, iid: str) -> float:
+        """Gris completo (0) si la instancia no está instalada; color normal (-1) si lo está."""
+        return 0.0 if self.cfg["installed"].get(iid) is None else -1.0
+
+    def _on_percent(self, value: int):
+        iid = self.installing
+        tile = self.tiles.get(iid) if iid else None
+        if tile is not None:
+            tile.set_progress(value / 100 if value >= 0 else self._base_progress(iid))
+        if value < 0 or value >= 100:
+            self.installing = None
+
+    # ------------------------------------------------------------ tema
+    def apply_theme(self, hex_color: str):
+        if not QColor(hex_color).isValid():
+            hex_color = DEFAULT_THEME
+        pal = make_palette(QColor(hex_color).name())
+        TileButton.accent = QColor(pal["ACCENT_HOVER"])
+        for tile in getattr(self, "tiles", {}).values():
+            tile.update()
+        self.bg_bottom = pal["bg_bottom"]
+        self.bg_glow = pal["bg_glow"]
+        self.title_glow.setColor(QColor(*pal["title_glow"], 210))
+        self.lbl_title.setText(f'<span style="font-size:54px;">{BRAND_LOGO}</span>')
+        QApplication.instance().setStyleSheet(build_qss(PIXEL_FONT, pal))
+        self.update()
+
+    def _open_theme(self):
+        original = self.cfg.get("theme", DEFAULT_THEME)
+        dlg = QColorDialog(QColor(original), self)
+        dlg.setWindowTitle("Personalización")
+        dlg.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+        dlg.currentColorChanged.connect(lambda c: self.apply_theme(c.name()))   # vista previa en vivo
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.cfg["theme"] = dlg.currentColor().name()
+            save_config(self.cfg)
+        self.apply_theme(self.cfg.get("theme", DEFAULT_THEME))
+        dlg.deleteLater()
 
     # ------------------------------------------------------------ avatar
     def _update_avatar(self):
@@ -1047,13 +1385,13 @@ class MainWindow(Background):
 
     def _make_tile(self, iid: str) -> QPushButton:
         entry = self.catalog[iid]
-        tile = QPushButton()
+        tile = TileButton()
         tile.setObjectName("tile")
         tile.setCheckable(True)
         tile.setFixedSize(64, 64)
         tile.setCursor(Qt.CursorShape.PointingHandCursor)
-        tile.setProperty("needs", "true" if self._needs_install(iid) else "false")
         tile.setToolTip(self._tooltip(iid))
+        tile.set_progress(self._base_progress(iid))      # gris mientras no esté instalada
 
         path = icon_path(iid)
         pix = QPixmap(str(path)) if path.exists() else QPixmap()
@@ -1100,6 +1438,12 @@ class MainWindow(Background):
     def _mark_selected(self):
         for iid, tile in self.tiles.items():
             tile.setChecked(iid == self.current)
+        self._update_play_label()
+
+    def _update_play_label(self):
+        """El botón dice «Instalar» si la instancia elegida aún no está instalada."""
+        missing = bool(self.current) and self.cfg["installed"].get(self.current) is None
+        self.btn_play.setText("Instalar" if missing else "Jugar")
 
     def _select(self, iid: str):
         if not self.busy:
@@ -1135,6 +1479,85 @@ class MainWindow(Background):
         d.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
 
+    # --------------------------------------------------- actualización del launcher
+    def _check_update_worker(self):
+        try:
+            info = parse_update(fetch_json(UPDATE_URL))
+            if info and parse_version(info["version"]) > parse_version(LAUNCHER_VERSION):
+                self.bus.update_found.emit(info["version"], info["url"], info["sha256"])
+        except Exception as e:
+            self.bus.log.emit(f"[{LAUNCHER_NAME}] No se pudo buscar actualizaciones ({type(e).__name__})")
+
+    def _ask_update(self, version: str, url: str, sha256: str):
+        if self.game_running or self.installing:        # no se interrumpe una partida o descarga
+            return
+        answer = QMessageBox.question(
+            self, "Actualización disponible",
+            f"Hay una versión nueva del launcher ({version}).\n¿Actualizar ahora? Se reiniciará solo.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.upd_dialog = UpdateDialog(self, version)
+        self.upd_dialog.show()
+        threading.Thread(target=self._update_worker, args=(url, sha256), daemon=True).start()
+
+    def _update_worker(self, url: str, sha256: str):
+        exe = Path(sys.executable)
+        new = exe.with_name(exe.name + ".new")
+        state = {"max": 1}
+
+        def set_max(m):
+            state["max"] = max(int(m), 1)
+
+        def set_progress(v):
+            self.bus.upd_progress.emit(min(100, int(int(v) * 100 / state["max"])))
+
+        try:
+            download_file(url, new, {"setMax": set_max, "setProgress": set_progress}, sha256)
+            if new.stat().st_size < 1_000_000:           # un .exe real pesa mucho más
+                raise RuntimeError("El archivo descargado no parece un programa válido.")
+            swap_executable(new)
+            self.bus.upd_done.emit("")
+        except Exception as e:
+            new.unlink(missing_ok=True)
+            self.bus.upd_done.emit(f"{type(e).__name__}: {e}")
+
+    def _on_upd_progress(self, value: int):
+        if self.upd_dialog is not None:
+            self.upd_dialog.bar.setValue(value)
+
+    def _on_upd_done(self, error: str):
+        if error:
+            if self.upd_dialog is not None:
+                self.upd_dialog.close()
+                self.upd_dialog = None
+            QMessageBox.warning(self, "No se pudo actualizar", error)
+            return
+        env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")   # el programa nuevo empieza limpio
+        flags = 0x00000008 | 0x00000200 if sys.platform.startswith("win") else 0
+        subprocess.Popen([sys.executable], env=env, close_fds=True, creationflags=flags)
+        QApplication.quit()
+
+    # ---------------------------------------------------------- acceso directo
+    def _offer_shortcut(self):
+        if self.cfg.get("shortcut_asked"):
+            return
+        self.cfg["shortcut_asked"] = True
+        save_config(self.cfg)
+        answer = QMessageBox.question(
+            self, "Acceso directo", "¿Quieres crear un acceso directo de 77K client en el escritorio?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if answer == QMessageBox.StandardButton.Yes:
+            self._make_shortcut()
+
+    def _make_shortcut(self):
+        if create_desktop_shortcut():
+            self.bus.status.emit("Acceso directo creado en el escritorio")
+        else:
+            QMessageBox.warning(self, "Acceso directo", "No se pudo crear el acceso directo.")
+
     # ----------------------------------------------------------------- jugar
     def _play(self):
         if self.busy:
@@ -1146,11 +1569,27 @@ class MainWindow(Background):
         self.cfg["last_instance"] = iid
         save_config(self.cfg)
         self._apply_busy(True)
-        threading.Thread(target=self._launch_worker, args=(iid,), daemon=True).start()
+        worker = self._install_worker if self.cfg["installed"].get(iid) is None else self._launch_worker
+        threading.Thread(target=worker, args=(iid,), daemon=True).start()
+
+    def _install_worker(self, iid: str):
+        """Solo instala (no abre el juego). Después el botón pasa a «Jugar»."""
+        bus = self.bus
+        entry = self.catalog[iid]
+        try:
+            self._install(entry, is_update=False)
+            bus.catalog.emit(iid)
+            bus.status.emit(f"«{entry['name']}» instalada")
+        except Exception as e:
+            bus.error.emit("Error al instalar", f"{type(e).__name__}: {e}")
+            bus.status.emit("Error")
+        finally:
+            bus.busy.emit(False)
 
     def _install(self, entry: dict, is_update: bool) -> dict:
         """Descarga e instala la instancia. Se ejecuta en un hilo de trabajo."""
         iid = entry["id"]
+        self.installing = iid
         cb = self._make_callback()
         game_dir = INSTANCES_DIR / iid
         tmp = DOWNLOADS_DIR / f"{iid}.mrpack"
@@ -1164,6 +1603,7 @@ class MainWindow(Background):
                 # Se reemplazan los mods; mundos y ajustes del jugador se conservan
                 shutil.rmtree(game_dir / "mods", ignore_errors=True)
 
+            ensure_java(cb)
             cb["setStatus"](f"Instalando «{entry['name']}»…")
             mll.mrpack.install_mrpack(
                 str(tmp), str(MC_DIR),
@@ -1174,6 +1614,7 @@ class MainWindow(Background):
             launch_version = mll.mrpack.get_mrpack_launch_version(str(tmp))
             info = mll.mrpack.get_mrpack_information(str(tmp))
         except Exception:
+            self.bus.percent.emit(-1)           # quita el gris del cuadrado
             if not is_update:
                 shutil.rmtree(game_dir, ignore_errors=True)
             raise
@@ -1189,6 +1630,7 @@ class MainWindow(Background):
         }
         self.cfg["installed"][iid] = record
         save_config(self.cfg)
+        self.bus.percent.emit(100)
         return record
 
     def _launch_worker(self, iid: str):
@@ -1230,6 +1672,7 @@ class MainWindow(Background):
             bus.status.emit(f"Iniciando «{entry['name']}»…")
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
             no_window = 0x08000000 if sys.platform.startswith("win") else 0   # sin ventana de consola
+            self.game_running = True
             proc = subprocess.Popen(
                 cmd, cwd=str(game_dir), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", bufsize=1, creationflags=no_window)
@@ -1244,17 +1687,24 @@ class MainWindow(Background):
             bus.error.emit("Error al iniciar", f"{type(e).__name__}: {e}")
             bus.status.emit("Error")
         finally:
+            self.game_running = False
             bus.busy.emit(False)
 
 
+PIXEL_FONT = False
+
+
 def main():
+    global PIXEL_FONT
     migrate_legacy_dir()
+    if is_frozen():                      # resto de una actualización anterior
+        Path(sys.executable).with_name(Path(sys.executable).name + ".old").unlink(missing_ok=True)
     app = QApplication(sys.argv)
     app.setApplicationName(LAUNCHER_NAME)
     family, pixel = load_fonts()
     if family:
         app.setFont(QFont(family, 11))
-    app.setStyleSheet(build_qss(pixel))
+    PIXEL_FONT = pixel
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
