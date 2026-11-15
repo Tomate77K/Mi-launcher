@@ -44,7 +44,7 @@ Type: files; Name: "{autoprograms}\77K client.lnk"
 Type: files; Name: "{autodesktop}\77K client.lnk"
 
 [Run]
-Filename: "{app}\CLIENT77K.exe"; Description: "Abrir CLIENT77K"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\CLIENT77K.exe"; Description: "Abrir CLIENT77K"; Flags: nowait postinstall
 
 [UninstallDelete]
 Type: files; Name: "{app}\CLIENT77K.exe.old"

@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import ssl
+import tempfile
 import subprocess
 import sys
 import threading
@@ -59,7 +60,7 @@ SSL_CONTEXT = make_ssl_context()
 
 BRAND_NAME = "CLIENT77K"
 LAUNCHER_NAME = BRAND_NAME
-LAUNCHER_VERSION = "1.0"
+LAUNCHER_VERSION = "1.1"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -561,48 +562,22 @@ def parse_update(data) -> dict | None:
     version = str(data.get("version", ""))
     if not version or not url.startswith(UPDATE_URL_PREFIX):
         return None
-    return {"version": version, "url": url, "sha256": str(data.get("sha256", "")).lower()}
+    installer = str(data.get("installer_url", ""))
+    return {
+        "version": version, "url": url, "sha256": str(data.get("sha256", "")).lower(),
+        # El instalador es lo que usan las versiones nuevas; url/sha256 quedan para las antiguas
+        "installer_url": installer if installer.startswith(UPDATE_URL_PREFIX) else "",
+        "installer_sha256": str(data.get("installer_sha256", "")).lower(),
+    }
+
+
+def installed_with_installer() -> bool:
+    """True si el programa se instaló con CLIENT77K-setup.exe (junto al .exe está el desinstalador)."""
+    return is_frozen() and (Path(sys.executable).parent / "unins000.exe").exists()
 
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
-
-
-def swap_executable(new_path: Path) -> Path:
-    """Windows no deja borrar un .exe en uso, pero sí renombrarlo: el actual pasa a .old
-    y el nuevo ocupa su lugar. El .old se borra la próxima vez que se abre."""
-    exe = Path(sys.executable)
-    old = exe.with_name(exe.name + ".old")
-    old.unlink(missing_ok=True)
-    exe.rename(old)
-    try:
-        new_path.rename(exe)
-    except OSError:
-        old.rename(exe)           # si falla, se deja todo como estaba
-        raise
-    return exe
-
-
-def create_desktop_shortcut() -> bool:
-    """Crea «CLIENT77K» en el escritorio (también si está en OneDrive) apuntando a este .exe."""
-    if not (is_frozen() and sys.platform.startswith("win")):
-        return False
-    script = (
-        "$d=[Environment]::GetFolderPath('Desktop');"
-        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($d+'\\CLIENT77K.lnk');"
-        "$s.TargetPath=$env:K77_EXE;"
-        "$s.WorkingDirectory=Split-Path $env:K77_EXE;"
-        "$s.IconLocation=$env:K77_EXE+',0';"
-        "$s.Description='CLIENT77K';"
-        "$s.Save()"
-    )
-    env = dict(os.environ, K77_EXE=sys.executable)
-    try:
-        done = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                              env=env, creationflags=0x08000000, timeout=30, capture_output=True)
-        return done.returncode == 0
-    except Exception:
-        return False
 
 
 def make_button(text: str, ghost: bool = False, name: str = "") -> QPushButton:
@@ -701,7 +676,6 @@ class Bus(QObject):
     avatar = Signal(str)         # ruta de la skin para el avatar ("" = silueta)
     error = Signal(str, str)     # título, mensaje
     log = Signal(str)
-    update_found = Signal(str, str, str)    # versión, url, sha256
     upd_progress = Signal(int)
     upd_done = Signal(str)                  # "" = bien; si no, el error
 
@@ -777,7 +751,7 @@ class UpdateDialog(FadeDialog):
         lay.setSpacing(14)
         head = QLabel(f"Actualizando a la versión {version}")
         head.setObjectName("head")
-        note = QLabel("El launcher se reiniciará solo al terminar.")
+        note = QLabel("Se abrirá solo cuando termine. No cierres esta ventana.")
         note.setObjectName("muted")
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -931,7 +905,6 @@ class MainWindow(Background):
         self.current: str | None = None       # instancia seleccionada
         self.installing: str | None = None    # instancia que se está descargando
         self.game_running = False             # Minecraft abierto (no se actualiza el launcher)
-        self.upd_dialog: UpdateDialog | None = None
         self.tiles: dict[str, QPushButton] = {}
         self.busy = False
         self.log_lines: deque = deque(maxlen=5000)
@@ -956,18 +929,12 @@ class MainWindow(Background):
         self.bus.log.connect(self._store_log)
         self.bus.avatar.connect(self._set_avatar)
         self.bus.account.connect(self._update_avatar)
-        self.bus.update_found.connect(self._ask_update)
-        self.bus.upd_progress.connect(self._on_upd_progress)
-        self.bus.upd_done.connect(self._on_upd_done)
 
         self._set_avatar("")                  # silueta mientras carga el avatar
         self._load_cached_manifest()
         self._rebuild_catalog()
         self._update_avatar()
         self._fetch_catalog()
-        if is_frozen():                 # solo en la app compilada, no al probar con python
-            threading.Thread(target=self._check_update_worker, daemon=True).start()
-            QTimer.singleShot(1500, self._offer_shortcut)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1076,8 +1043,7 @@ class MainWindow(Background):
         self.gear_menu.addAction(glyph_icon(0xE9E9, soft), "Memoria RAM (GB)").triggered.connect(self._open_ram)
         self.gear_menu.addSeparator()
         self.gear_menu.addAction(glyph_icon(0xE790, soft), "Personalización").triggered.connect(self._open_theme)
-        if is_frozen():
-            self.gear_menu.addAction(glyph_icon(0xE718, soft), "Crear acceso directo").triggered.connect(self._make_shortcut)
+
 
         # ---- menú de los tres puntos (instancias)
         self.more_menu = FadeMenu(self.btn_more)
@@ -1487,87 +1453,6 @@ class MainWindow(Background):
         d.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
 
-    # --------------------------------------------------- actualización del launcher
-    def _check_update_worker(self):
-        try:
-            info = parse_update(fetch_json(UPDATE_URL))
-            if info and parse_version(info["version"]) > parse_version(LAUNCHER_VERSION):
-                self.bus.update_found.emit(info["version"], info["url"], info["sha256"])
-        except Exception as e:
-            self.bus.log.emit(f"[{LAUNCHER_NAME}] No se pudo buscar actualizaciones ({type(e).__name__})")
-
-    def _ask_update(self, version: str, url: str, sha256: str):
-        if self.game_running or self.installing:        # no se interrumpe una partida o descarga
-            return
-        answer = QMessageBox.question(
-            self, "Actualización disponible",
-            f"Hay una versión nueva del launcher ({version}).\n¿Actualizar ahora? Se reiniciará solo.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes)
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self.upd_dialog = UpdateDialog(self, version)
-        self.upd_dialog.show()
-        threading.Thread(target=self._update_worker, args=(url, sha256), daemon=True).start()
-
-    def _update_worker(self, url: str, sha256: str):
-        exe = Path(sys.executable)
-        new = exe.with_name(exe.name + ".new")
-        state = {"max": 1}
-
-        def set_max(m):
-            state["max"] = max(int(m), 1)
-
-        def set_progress(v):
-            self.bus.upd_progress.emit(min(100, int(int(v) * 100 / state["max"])))
-
-        try:
-            download_file(url, new, {"setMax": set_max, "setProgress": set_progress}, sha256)
-            if new.stat().st_size < 1_000_000:           # un .exe real pesa mucho más
-                raise RuntimeError("El archivo descargado no parece un programa válido.")
-            swap_executable(new)
-            self.bus.upd_done.emit("")
-        except Exception as e:
-            new.unlink(missing_ok=True)
-            self.bus.upd_done.emit(f"{type(e).__name__}: {e}")
-
-    def _on_upd_progress(self, value: int):
-        if self.upd_dialog is not None:
-            self.upd_dialog.bar.setValue(value)
-
-    def _on_upd_done(self, error: str):
-        if error:
-            if self.upd_dialog is not None:
-                self.upd_dialog.close()
-                self.upd_dialog = None
-            QMessageBox.warning(self, "No se pudo actualizar", error)
-            return
-        env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")   # el programa nuevo empieza limpio
-        flags = 0x00000008 | 0x00000200 if sys.platform.startswith("win") else 0
-        subprocess.Popen([sys.executable], env=env, close_fds=True, creationflags=flags)
-        QApplication.quit()
-
-    # ---------------------------------------------------------- acceso directo
-    def _offer_shortcut(self):
-        if (Path(sys.executable).parent / "unins000.exe").exists():
-            return                      # instalado con el instalador: ya ofreció el acceso directo
-        if self.cfg.get("shortcut_asked"):
-            return
-        self.cfg["shortcut_asked"] = True
-        save_config(self.cfg)
-        answer = QMessageBox.question(
-            self, "Acceso directo", "¿Quieres crear un acceso directo de CLIENT77K en el escritorio?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes)
-        if answer == QMessageBox.StandardButton.Yes:
-            self._make_shortcut()
-
-    def _make_shortcut(self):
-        if create_desktop_shortcut():
-            self.bus.status.emit("Acceso directo creado en el escritorio")
-        else:
-            QMessageBox.warning(self, "Acceso directo", "No se pudo crear el acceso directo.")
-
     # ----------------------------------------------------------------- jugar
     def _play(self):
         if self.busy:
@@ -1704,6 +1589,61 @@ class MainWindow(Background):
 PIXEL_FONT = False
 
 
+def run_pending_update() -> bool:
+    """Antes de abrir el launcher: si hay una versión nueva, se descarga el instalador y se ejecuta
+    (obligatorio). El instalador reemplaza el programa y lo vuelve a abrir. Devuelve True si el
+    launcher debe cerrarse para que el instalador pueda trabajar."""
+    if not installed_with_installer():
+        return False                       # solo se actualiza lo instalado con el instalador
+    try:
+        info = parse_update(fetch_json(UPDATE_URL, timeout=6))
+    except Exception:
+        return False                       # sin internet: se abre la versión actual
+    if (not info or not info["installer_url"]
+            or parse_version(info["version"]) <= parse_version(LAUNCHER_VERSION)):
+        return False
+
+    theme = QColor(load_config().get("theme", DEFAULT_THEME))
+    QApplication.instance().setStyleSheet(
+        build_qss(PIXEL_FONT, make_palette(theme.name() if theme.isValid() else DEFAULT_THEME)))
+
+    bus = Bus()
+    dlg = UpdateDialog(None, info["version"])
+    result = {"error": ""}
+    setup = Path(tempfile.gettempdir()) / "CLIENT77K-setup.exe"
+    state = {"max": 1}
+
+    def set_max(m):
+        state["max"] = max(int(m), 1)
+
+    def set_progress(v):
+        bus.upd_progress.emit(min(100, int(int(v) * 100 / state["max"])))
+
+    def work():
+        try:
+            download_file(info["installer_url"], setup,
+                          {"setMax": set_max, "setProgress": set_progress}, info["installer_sha256"])
+            if setup.stat().st_size < 1_000_000:
+                raise RuntimeError("El archivo descargado no parece un instalador válido.")
+        except Exception as e:
+            result["error"] = f"{type(e).__name__}: {e}"
+        bus.upd_done.emit(result["error"])
+
+    bus.upd_progress.connect(dlg.bar.setValue)
+    bus.upd_done.connect(lambda _err: dlg.done(0))
+    threading.Thread(target=work, daemon=True).start()
+    dlg.exec()
+
+    if result["error"]:
+        QMessageBox.warning(None, "No se pudo actualizar",
+                            f"{result['error']}\n\nSe abrirá la versión actual.")
+        return False
+    flags = 0x00000008 | 0x00000200 if sys.platform.startswith("win") else 0
+    subprocess.Popen([str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NOCANCEL", "/CLOSEAPPLICATIONS"],
+                     close_fds=True, creationflags=flags)
+    return True
+
+
 def main():
     global PIXEL_FONT
     migrate_legacy_dir()
@@ -1715,6 +1655,8 @@ def main():
     if family:
         app.setFont(QFont(family, 11))
     PIXEL_FONT = pixel
+    if run_pending_update():
+        sys.exit(0)                      # el instalador reemplaza el programa y lo reabre
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
