@@ -13,12 +13,12 @@ VSVersionInfo(
     StringFileInfo([
       StringTable('040904B0', [
         StringStruct('CompanyName', 'Tomate77K'),
-        StringStruct('FileDescription', '77K client'),
+        StringStruct('FileDescription', 'CLIENT77K'),
         StringStruct('FileVersion', '0.7.0.0'),
-        StringStruct('InternalName', 'client'),
+        StringStruct('InternalName', 'CLIENT77K'),
         StringStruct('LegalCopyright', 'Tomate77K'),
-        StringStruct('OriginalFilename', 'client.exe'),
-        StringStruct('ProductName', '77K client'),
+        StringStruct('OriginalFilename', 'CLIENT77K.exe'),
+        StringStruct('ProductName', 'CLIENT77K'),
         StringStruct('ProductVersion', '0.7.0.0')
       ])
     ]),

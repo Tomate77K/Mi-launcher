@@ -1,4 +1,4 @@
-"""77K client: launcher de Minecraft (Java Edition) con instancias publicadas por su autor.
+"""CLIENT77K: launcher de Minecraft (Java Edition) con instancias publicadas por su autor.
 
 El autor publica sus instancias (.mrpack) y una lista (instances.json) en GitHub.
 Al abrir el launcher, las instancias aparecen solas como cuadrados; quien lo use
@@ -57,10 +57,9 @@ def make_ssl_context() -> ssl.SSLContext:
 
 SSL_CONTEXT = make_ssl_context()
 
-BRAND_LOGO = "77K"
-BRAND_NAME = "client"
-LAUNCHER_NAME = f"{BRAND_LOGO} {BRAND_NAME}"
-LAUNCHER_VERSION = "0.8"
+BRAND_NAME = "CLIENT77K"
+LAUNCHER_NAME = BRAND_NAME
+LAUNCHER_VERSION = "1.0"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -91,7 +90,7 @@ REDIRECT_URI = f"http://localhost:{LOGIN_PORT}"
 LOGIN_TIMEOUT_S = 180
 
 DEFAULT_RAM_MB = 4096
-USER_AGENT = f"{BRAND_LOGO}-client/{LAUNCHER_VERSION}"
+USER_AGENT = f"{BRAND_NAME}/{LAUNCHER_VERSION}"
 
 # Cuenta oficial de Mojang cuya skin es Steve. El launcher descarga su textura de los
 # servidores de Mojang (no se incluye ninguna imagen del juego con el launcher).
@@ -585,16 +584,16 @@ def swap_executable(new_path: Path) -> Path:
 
 
 def create_desktop_shortcut() -> bool:
-    """Crea «77K client» en el escritorio (también si está en OneDrive) apuntando a este .exe."""
+    """Crea «CLIENT77K» en el escritorio (también si está en OneDrive) apuntando a este .exe."""
     if not (is_frozen() and sys.platform.startswith("win")):
         return False
     script = (
         "$d=[Environment]::GetFolderPath('Desktop');"
-        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($d+'\\77K client.lnk');"
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($d+'\\CLIENT77K.lnk');"
         "$s.TargetPath=$env:K77_EXE;"
         "$s.WorkingDirectory=Split-Path $env:K77_EXE;"
         "$s.IconLocation=$env:K77_EXE+',0';"
-        "$s.Description='77K client';"
+        "$s.Description='CLIENT77K';"
         "$s.Save()"
     )
     env = dict(os.environ, K77_EXE=sys.executable)
@@ -939,7 +938,7 @@ class MainWindow(Background):
         self.logs_dialog: LogsDialog | None = None
         self.bus = Bus()
 
-        self.setWindowTitle(BRAND_NAME)       # junto al icono 77K se lee "77K client"
+        self.setWindowTitle(BRAND_NAME)
         icon_file = resource_path("icon.ico")
         if icon_file.exists():
             self.setWindowIcon(QIcon(str(icon_file)))
@@ -989,7 +988,7 @@ class MainWindow(Background):
         root.setContentsMargins(30, 20, 30, 26)
         root.setSpacing(14)
 
-        # ---- barra superior: "77K" y la tuerca
+        # ---- barra superior: logo, nombre y la tuerca
         top = QHBoxLayout()
         title = QLabel()
         title.setObjectName("title")
@@ -1004,6 +1003,15 @@ class MainWindow(Background):
         self.btn_gear.setFixedSize(46, 46)
         self.btn_gear.clicked.connect(self._show_gear_menu)
 
+        icon_file = resource_path("icon.ico")
+        if icon_file.exists():                     # el logo (tomate) a la izquierda del nombre
+            logo = QLabel()
+            pix = QIcon(str(icon_file)).pixmap(QSize(112, 112))
+            pix.setDevicePixelRatio(2.0)           # se ve nítido en pantallas normales y HD
+            logo.setPixmap(pix)
+            logo.setFixedSize(56, 56)
+            top.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
+            top.addSpacing(14)
         top.addWidget(title)
         top.addStretch()
         top.addWidget(self.btn_gear, 0, Qt.AlignmentFlag.AlignTop)
@@ -1156,7 +1164,7 @@ class MainWindow(Background):
         self.bg_bottom = pal["bg_bottom"]
         self.bg_glow = pal["bg_glow"]
         self.title_glow.setColor(QColor(*pal["title_glow"], 210))
-        self.lbl_title.setText(f'<span style="font-size:54px;">{BRAND_LOGO}</span>')
+        self.lbl_title.setText(f'<span style="font-size:40px;">{BRAND_NAME}</span>')
         QApplication.instance().setStyleSheet(build_qss(PIXEL_FONT, pal))
         self.update()
 
@@ -1548,7 +1556,7 @@ class MainWindow(Background):
         self.cfg["shortcut_asked"] = True
         save_config(self.cfg)
         answer = QMessageBox.question(
-            self, "Acceso directo", "¿Quieres crear un acceso directo de 77K client en el escritorio?",
+            self, "Acceso directo", "¿Quieres crear un acceso directo de CLIENT77K en el escritorio?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes)
         if answer == QMessageBox.StandardButton.Yes:
