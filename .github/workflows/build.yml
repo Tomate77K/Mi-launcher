@@ -1,0 +1,81 @@
+name: Compilar y publicar
+
+# Se ejecuta cuando subes cambios al launcher (o a mano desde la pestaña Actions).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "launcher.py"
+      - "requirements.txt"
+      - "icon.ico"
+      - "fonts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Leer la versión y actualizar version_info.txt
+        id: ver
+        shell: python
+        run: |
+          import os, re
+          src = open("launcher.py", encoding="utf-8").read()
+          v = re.search(r'LAUNCHER_VERSION = "([^"]+)"', src).group(1)
+          nums = (re.findall(r"\d+", v) + ["0"] * 4)[:4]
+          dotted = ".".join(nums)
+          t = open("version_info.txt", encoding="utf-8").read()
+          t = re.sub(r"(filevers|prodvers)=\([^)]*\)", lambda m: m.group(1) + "=(" + ", ".join(nums) + ")", t)
+          t = re.sub(r"(StringStruct\('(?:FileVersion|ProductVersion)', ')[^']*(')", lambda m: m.group(1) + dotted + m.group(2), t)
+          open("version_info.txt", "w", encoding="utf-8").write(t)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("version=" + v + "\n")
+
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Compilar client.exe
+        run: >
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name client
+          --icon icon.ico --add-data "icon.ico;." --add-data "fonts;fonts"
+          --version-file version_info.txt
+          --collect-submodules minecraft_launcher_lib --collect-data certifi launcher.py
+
+      - name: Publicar la release y actualizar latest.json
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $tag = "app-$v"
+          $hash = (Get-FileHash dist/client.exe -Algorithm SHA256).Hash.ToLower()
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/client.exe --clobber
+          } else {
+            gh release create $tag dist/client.exe --title "77K client $v" --notes "Versión $v"
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          $json = [ordered]@{
+            version = $v
+            url     = "https://github.com/${{ github.repository }}/releases/download/$tag/client.exe"
+            sha256  = $hash
+          } | ConvertTo-Json
+          Set-Content -Path latest.json -Value $json -Encoding utf8
+
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add latest.json
+          git commit -m "Actualizar latest.json a $v"
+          git push
