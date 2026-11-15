@@ -8,6 +8,14 @@
       "mrpack_url": "https://github.com/Tomate77K/Mi-launcher/releases/download/0.1/Tomatin.1.0.0.mrpack",
       "ram_mb": 4096,
       "icon_url": "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/icons/Prueba.png"
+    },
+    {
+      "id": "segundo-modpack",
+      "name": "Pokemon",
+      "version": "1.0.0",
+      "mrpack_url": "https://github.com/Tomate77K/Mi-launcher/releases/download/0.0.1/COBBLEVERSE.mrpack",
+      "ram_mb": 6144,
+      "icon_url": "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/icons/pokemon.png"
     }
   ]
 }
