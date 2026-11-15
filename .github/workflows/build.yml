@@ -93,3 +93,4 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           git push
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          
