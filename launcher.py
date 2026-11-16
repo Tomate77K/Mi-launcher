@@ -1088,7 +1088,7 @@ class MainWindow(Background):
         self.logs_dialog: LogsDialog | None = None
         self.bus = Bus()
 
-        self.setWindowTitle(BRAND_NAME)
+        self.setWindowTitle("CLIENT77K")      # título de la ventana (el nombre grande de dentro es BRAND_NAME)
         icon_file = resource_path("icon.ico")
         if icon_file.exists():
             self.setWindowIcon(QIcon(str(icon_file)))
