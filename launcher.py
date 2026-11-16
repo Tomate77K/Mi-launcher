@@ -308,30 +308,15 @@ def load_fonts() -> tuple[str, bool]:
 
 
 class Background(QWidget):
-    """Ventana sin marco, redondeada como una app de Apple: sombra suave y degradado vertical
-    (negro arriba, color del tema abajo)."""
+    """Fondo de la ventana: degradado vertical (negro arriba, color del tema abajo).
+    El marco, los botones de cerrar/minimizar y el icono son los normales de Windows."""
 
-    MARGIN = 24          # espacio transparente alrededor, para la sombra
-    RADIUS = 32
     bg_bottom = (96, 30, 150)
     bg_glow = (150, 60, 220)
 
     def paintEvent(self, _event):
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        m, r = self.MARGIN, self.RADIUS
-        rect = QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m)
-
-        # sombra: anillos cada vez más transparentes
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        for i in range(1, m - 3):
-            alpha = int(60 * (1 - i / (m - 3)) ** 2)
-            p.setPen(QPen(QColor(0, 0, 0, alpha), 1))
-            p.drawRoundedRect(rect.adjusted(-i, -i + 4, i, i + 4), r + i, r + i)
-
-        clip = QPainterPath()
-        clip.addRoundedRect(rect, r, r)
-        p.setClipPath(clip)
+        rect = QRectF(self.rect())
         grad = QLinearGradient(0, rect.top(), 0, rect.bottom())
         grad.setColorAt(0.0, QColor(0, 0, 0))
         grad.setColorAt(0.30, QColor(0, 0, 0))
@@ -343,50 +328,7 @@ class Background(QWidget):
         glow.setColorAt(0.0, QColor(*self.bg_glow, 80))
         glow.setColorAt(1.0, QColor(*self.bg_glow, 0))
         p.fillRect(rect, glow)
-
-        p.setClipping(False)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
-        p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), r, r)
         p.end()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.windowHandle() is not None:
-            self.windowHandle().startSystemMove()          # arrastrar la ventana desde cualquier parte libre
-        super().mousePressEvent(event)
-
-
-class TrafficButton(QPushButton):
-    """Botón redondo de la esquina (rojo cierra, amarillo minimiza), como en macOS."""
-
-    def __init__(self, color: str, glyph: str):
-        super().__init__()
-        self._color, self._glyph = QColor(color), glyph
-        self.setFixedSize(16, 16)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def paintEvent(self, _event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(self._color)
-        p.drawEllipse(QRectF(0.5, 0.5, 15, 15))
-        if self.underMouse():
-            p.setPen(QPen(QColor(60, 20, 20, 200), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            if self._glyph == "x":
-                p.drawLine(5, 5, 11, 11)
-                p.drawLine(11, 5, 5, 11)
-            else:
-                p.drawLine(5, 8, 11, 8)
-        p.end()
-
-    def enterEvent(self, event):
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self.update()
-        super().leaveEvent(event)
 
 
 class TileButton(QPushButton):
@@ -1150,9 +1092,7 @@ class MainWindow(Background):
         icon_file = resource_path("icon.ico")
         if icon_file.exists():
             self.setWindowIcon(QIcon(str(icon_file)))
-        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(960 + 2 * self.MARGIN, 600 + 2 * self.MARGIN)
+        self.setFixedSize(960, 600)                # marco normal de Windows (icono, minimizar y cerrar)
 
         self._build_ui()
         self.apply_theme(self.cfg.get("theme", DEFAULT_THEME), self.cfg.get("theme_style", "vivid"))
@@ -1188,23 +1128,10 @@ class MainWindow(Background):
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         root = QVBoxLayout(self)
-        m = self.MARGIN
-        root.setContentsMargins(m + 32, m + 18, m + 32, m + 28)
+        root.setContentsMargins(32, 22, 32, 28)
         root.setSpacing(14)
 
-        # ---- botones redondos de la esquina (cerrar y minimizar), como en macOS
-        corner = QHBoxLayout()
-        corner.setSpacing(8)
-        btn_close = TrafficButton("#ff5f57", "x")
-        btn_min = TrafficButton("#febc2e", "-")
-        btn_close.clicked.connect(self.close)
-        btn_min.clicked.connect(self.showMinimized)
-        corner.addWidget(btn_close)
-        corner.addWidget(btn_min)
-        corner.addStretch()
-        root.addLayout(corner)
-
-        # ---- barra superior: logo, nombre y la tuerca
+        # ---- barra superior: nombre a la izquierda y la tuerca
         top = QHBoxLayout()
         title = QLabel()
         title.setObjectName("title")
@@ -1219,18 +1146,11 @@ class MainWindow(Background):
         self.btn_gear.setFixedSize(46, 46)
         self.btn_gear.clicked.connect(self._show_gear_menu)
 
-        icon_file = resource_path("icon.ico")
-        if icon_file.exists():                     # el logo (tomate) a la izquierda del nombre
-            logo = QLabel()
-            pix = QIcon(str(icon_file)).pixmap(QSize(112, 112))
-            pix.setDevicePixelRatio(2.0)           # se ve nítido en pantallas normales y HD
-            logo.setPixmap(pix)
-            logo.setFixedSize(56, 56)
-            top.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
-            top.addSpacing(14)
-        top.addWidget(title)
+        # nombre a la izquierda, alineado con la columna de instancias; la tuerca a la derecha,
+        # los dos centrados en la misma fila
+        top.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         top.addStretch()
-        top.addWidget(self.btn_gear, 0, Qt.AlignmentFlag.AlignTop)
+        top.addWidget(self.btn_gear, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(top)
 
         # ---- cuerpo: columna de instancias a la izquierda (llega hasta abajo, al nivel de
