@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Leer la versión y actualizar version_info.txt
+      - name: Leer la versión
         id: ver
         shell: python
         run: |
@@ -35,23 +35,31 @@ jobs:
           src = open("launcher.py", encoding="utf-8").read()
           v = re.search(r'LAUNCHER_VERSION = "([^"]+)"', src).group(1)
           nums = (re.findall(r"\d+", v) + ["0"] * 4)[:4]
-          dotted = ".".join(nums)
-          t = open("version_info.txt", encoding="utf-8").read()
-          t = re.sub(r"(filevers|prodvers)=\([^)]*\)", lambda m: m.group(1) + "=(" + ", ".join(nums) + ")", t)
-          t = re.sub(r"(StringStruct\('(?:FileVersion|ProductVersion)', ')[^']*(')", lambda m: m.group(1) + dotted + m.group(2), t)
-          open("version_info.txt", "w", encoding="utf-8").write(t)
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write("version=" + v + "\n")
+              out.write("fileversion=" + ".".join(nums) + "\n")
 
       - name: Instalar dependencias
-        run: python -m pip install -r requirements.txt pyinstaller
+        run: python -m pip install -r requirements.txt nuitka ordered-set zstandard
 
-      - name: Compilar CLIENT77K.exe
+      - name: Compilar TOMATE77K con Nuitka
         run: >
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name CLIENT77K
-          --icon icon.ico --add-data "icon.ico;." --add-data "fonts;fonts"
-          --version-file version_info.txt
-          --collect-submodules minecraft_launcher_lib --collect-data certifi launcher.py
+          python -m nuitka --standalone --assume-yes-for-downloads
+          --windows-console-mode=disable --enable-plugin=pyside6
+          --include-qt-plugins=platforms,styles,imageformats
+          --windows-icon-from-ico=icon.ico
+          --include-data-files=icon.ico=icon.ico --include-data-dir=fonts=fonts
+          --include-package=minecraft_launcher_lib --include-package-data=certifi
+          --company-name=Tomate77K --product-name=TOMATE77K --file-description=TOMATE77K
+          --file-version=${{ steps.ver.outputs.fileversion }}
+          --product-version=${{ steps.ver.outputs.fileversion }}
+          --output-filename=TOMATE77K.exe --output-dir=dist launcher.py
+
+      - name: Comprobar el resultado
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Format-Table Name
+          if (!(Test-Path dist/launcher.dist/TOMATE77K.exe)) { Write-Error "No se creó dist/launcher.dist/TOMATE77K.exe"; exit 1 }
 
       - name: Compilar el instalador
         shell: pwsh
@@ -67,20 +75,27 @@ jobs:
         run: |
           $v = "${{ steps.ver.outputs.version }}"
           $tag = "app-$v"
-          $hash = (Get-FileHash dist/CLIENT77K.exe -Algorithm SHA256).Hash.ToLower()
+          $setup = "installer_out/TOMATE77K-setup.exe"
+          $setupHash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          $setupUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/TOMATE77K-setup.exe"
 
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag dist/CLIENT77K.exe installer_out/CLIENT77K-setup.exe --clobber
+            gh release upload $tag $setup --clobber
           } else {
-            gh release create $tag dist/CLIENT77K.exe installer_out/CLIENT77K-setup.exe --title "CLIENT77K $v" --notes "Versión $v"
+            gh release create $tag $setup --title "TOMATE77K $v" --notes "Versión $v"
           }
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+          # url/sha256 son para versiones antiguas del launcher (que reemplazaban el .exe). Ya no
+          # existe un .exe suelto, así que el sha256 es intencionalmente falso: esas versiones
+          # rechazan la descarga y siguen funcionando; deben instalar el nuevo instalador a mano.
           $json = [ordered]@{
-            version = $v
-            url     = "https://github.com/${{ github.repository }}/releases/download/$tag/CLIENT77K.exe"
-            sha256  = $hash
+            version          = $v
+            url              = $setupUrl
+            sha256           = ("0" * 64)
+            installer_url    = $setupUrl
+            installer_sha256 = $setupHash
           } | ConvertTo-Json
           Set-Content -Path latest.json -Value $json -Encoding utf8
 
