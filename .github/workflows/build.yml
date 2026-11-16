@@ -68,7 +68,6 @@ jobs:
           $v = "${{ steps.ver.outputs.version }}"
           $tag = "app-$v"
           $hash = (Get-FileHash dist/CLIENT77K.exe -Algorithm SHA256).Hash.ToLower()
-          $setupHash = (Get-FileHash installer_out/CLIENT77K-setup.exe -Algorithm SHA256).Hash.ToLower()
 
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -82,8 +81,6 @@ jobs:
             version = $v
             url     = "https://github.com/${{ github.repository }}/releases/download/$tag/CLIENT77K.exe"
             sha256  = $hash
-            installer_url    = "https://github.com/${{ github.repository }}/releases/download/$tag/CLIENT77K-setup.exe"
-            installer_sha256 = $setupHash
           } | ConvertTo-Json
           Set-Content -Path latest.json -Value $json -Encoding utf8
 
