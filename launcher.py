@@ -60,7 +60,7 @@ SSL_CONTEXT = make_ssl_context()
 
 BRAND_NAME = "TOMATE77K"
 LAUNCHER_NAME = BRAND_NAME
-LAUNCHER_VERSION = "1.3"
+LAUNCHER_VERSION = "1.4"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
