@@ -1,4 +1,4 @@
-# 77K client
+# TOMATE77K
 
 A small, non-commercial custom launcher for **Minecraft: Java Edition**, written in Python with [minecraft-launcher-lib](https://codeberg.org/JakobDev/minecraft-launcher-lib) and a Qt (PySide6) interface. It is made for personal use and a small group of friends.
 
@@ -22,7 +22,7 @@ A small, non-commercial custom launcher for **Minecraft: Java Edition**, written
 
 - Python 3.10 or newer
 - `pip install -r requirements.txt` (minecraft-launcher-lib and PySide6)
-- Optional: a Minecraft-style font (`.ttf`) in a `fonts/` folder next to `launcher.py`.
+- The `fonts/` folder holds the Poppins font (SIL Open Font License 1.1), used by the interface. Keep the folder next to `launcher.py`.
 
 ## Run
 
@@ -36,6 +36,13 @@ python launcher.py
 2. Create a GitHub Release and attach the `.mrpack` file to it.
 3. Add an entry to `instances.json` with the release download URL and bump `version` whenever you publish an update. Optionally add `icon_url` (https PNG shown on the instance square) and `sha256` (hash of the file) so the launcher verifies the download.
 4. Commit `instances.json`. Players get the new list when they open the launcher, and the update is installed the next time they press Play.
+
+## Launcher updates (for the author)
+
+1. Raise `LAUNCHER_VERSION` in `launcher.py` (and the version in `version_info.txt`) and build with `build_un_solo_exe.bat`.
+2. Create a GitHub Release (for example `app-0.8`) and attach the new `client.exe`.
+3. Edit `latest.json`: set `version` and the release download `url` (it must start with `https://github.com/Tomate77K/`). Optional: `sha256` of the file.
+4. When players open the launcher they are offered the update; it downloads, replaces itself and restarts.
 
 ---
 
@@ -66,3 +73,10 @@ python launcher.py
 4. Haz commit de `instances.json`. Los jugadores reciben la lista nueva al abrir el launcher y la actualización se instala la próxima vez que pulsen Jugar.
 
 Los tokens de sesión se guardan solo en tu computador. No hay servidor propio ni se envían datos a terceros.
+
+## Actualizar el launcher (para el autor)
+
+1. Sube `LAUNCHER_VERSION` en `launcher.py` (y la versión en `version_info.txt`) y compila con `build_un_solo_exe.bat`.
+2. Crea una Release en GitHub (por ejemplo `app-0.8`) y adjunta el nuevo `client.exe`.
+3. Edita `latest.json`: cambia `version` y la `url` de descarga de la release (debe empezar con `https://github.com/Tomate77K/`). Opcional: `sha256` del archivo.
+4. Al abrir el launcher, los jugadores reciben la oferta de actualizar; se descarga, se reemplaza solo y se reinicia.

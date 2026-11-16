@@ -1,4 +1,4 @@
-"""CLIENT77K: launcher de Minecraft (Java Edition) con instancias publicadas por su autor.
+"""TOMATE77K: launcher de Minecraft (Java Edition) con instancias publicadas por su autor.
 
 El autor publica sus instancias (.mrpack) y una lista (instances.json) en GitHub.
 Al abrir el launcher, las instancias aparecen solas como cuadrados; quien lo use
@@ -58,9 +58,9 @@ def make_ssl_context() -> ssl.SSLContext:
 
 SSL_CONTEXT = make_ssl_context()
 
-BRAND_NAME = "CLIENT77K"
+BRAND_NAME = "TOMATE77K"
 LAUNCHER_NAME = BRAND_NAME
-LAUNCHER_VERSION = "1.1"
+LAUNCHER_VERSION = "1.3"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -107,23 +107,35 @@ DEFAULT_CONFIG = {
     "account": None,
     "shortcut_asked": False,    # ya se ofreció crear el acceso directo
     "theme": "#8b2fe0",         # color principal elegido en Personalización
+    "theme_style": "vivid",     # vivid (neón), pastel o matte (mate)
 }
 
 # ----------------------------------------------------------------- apariencia
 DEFAULT_THEME = "#8b2fe0"
 
 
-def make_palette(hex_color: str) -> dict:
-    """Calcula todos los colores de la interfaz a partir de un único color principal."""
+PRESETS = (
+    ("Neón", "vivid", (("Morado", "#8b2fe0"), ("Celeste", "#22b8e8"), ("Vino", "#b3123f"),
+                       ("Esmeralda", "#10b981"), ("Rojo", "#e11d48"))),
+    ("Pastel", "pastel", (("Lila", "#b79cff"), ("Rosa", "#ff9ec4"), ("Menta", "#7fe0b8"),
+                          ("Cielo", "#8fd0ff"), ("Durazno", "#ffb38a"), ("Limón", "#e8e27a"))),
+    ("Mate", "matte", (("Morado", "#7a5c99"), ("Pizarra", "#5b7a99"), ("Salvia", "#7a9a7e"),
+                       ("Vino", "#8a4a5a"), ("Arena", "#a89480"), ("Grafito", "#6b6f7a"))),
+)
+
+
+def make_palette(hex_color: str, style: str = "vivid") -> dict:
+    """Calcula todos los colores de la interfaz a partir de un color y un estilo
+    (vivid = neón, pastel = suave y claro, matte = apagado)."""
     try:
         h = hex_color.lstrip("#")
         r, g, b = (int(h[k:k + 2], 16) / 255 for k in (0, 2, 4))
     except (ValueError, IndexError):
-        return make_palette(DEFAULT_THEME)
+        return make_palette(DEFAULT_THEME, style)
     hue, light, sat = colorsys.rgb_to_hls(r, g, b)
 
-    def col(l, s, hh=hue):
-        rr, gg, bb = colorsys.hls_to_rgb(hh, max(0.0, min(1.0, l)), max(0.0, min(1.0, s)))
+    def col(l, s_, hh=hue):
+        rr, gg, bb = colorsys.hls_to_rgb(hh, max(0.0, min(1.0, l)), max(0.0, min(1.0, s_)))
         return (round(rr * 255), round(gg * 255), round(bb * 255))
 
     def hx(c):
@@ -132,26 +144,42 @@ def make_palette(hex_color: str) -> dict:
     def rgb(c):
         return "%d, %d, %d" % c
 
-    l = min(max(light, 0.32), 0.62)           # evita acentos casi negros o casi blancos
-    accent = col(l, sat)
+    if style == "pastel":
+        l, s_ = 0.78, 0.70
+        bg_bottom, bg_glow, li = col(0.50, 0.42), col(0.72, 0.65), col(0.82, 0.70)
+        btn_text = hx(col(0.12, 0.45))             # texto oscuro sobre el pastel claro
+    elif style == "matte":
+        l, s_ = 0.46, min(max(sat, 0.06), 0.42)
+        bg_bottom, bg_glow, li = col(0.24, s_), col(0.42, s_), col(0.70, s_)
+        btn_text = "#ffffff"
+    else:
+        l, s_ = min(max(light, 0.32), 0.62), sat    # evita acentos casi negros o casi blancos
+        bg_bottom, bg_glow, li = col(0.30, sat), col(0.50, sat), col(0.72, sat)
+        btn_text = "#ffffff"
+
+    accent = col(l, s_)
+    dlg = col(0.08, s_ * 0.6)
     return {
         "ACCENT": hx(accent),
-        "ACCENT_HOVER": hx(col(l + 0.08, sat)),
-        "ACCENT_PRESSED": hx(col(l - 0.08, sat)),
-        "ACCENT_DISABLED": hx(col(0.22, sat * 0.4)),
-        "DIS_TEXT": hx(col(0.50, sat * 0.3)),
-        "TEXT": hx(col(0.95, sat * 0.8)),
-        "MUTED": hx(col(0.72, sat * 0.5)),
-        "SUB": hx(col(0.80, sat * 0.7)),
+        "ACCENT_HOVER": hx(col(l + 0.07, s_)),
+        "ACCENT_PRESSED": hx(col(l - 0.08, s_)),
+        "ACCENT_DISABLED": hx(col(0.22, s_ * 0.4)),
+        "DIS_TEXT": hx(col(0.50, s_ * 0.3)),
+        "TEXT": hx(col(0.95, s_ * 0.8)),
+        "MUTED": hx(col(0.74, s_ * 0.5)),
+        "SUB": hx(col(0.80, s_ * 0.7)),
+        "BTN_TEXT": btn_text,
         "AC": rgb(accent),
-        "LI": rgb(col(0.72, sat)),
-        "DK": rgb(col(0.06, sat * 0.6)),
-        "DLG": hx(col(0.08, sat * 0.6)),
-        "MENU": hx(col(0.11, sat * 0.6)),
-        # No son textos de la hoja de estilo, los usa el fondo y el brillo del título
-        "bg_bottom": col(0.30, sat),
-        "bg_glow": col(0.50, sat),
-        "title_glow": col(0.60, sat),
+        "LI": rgb(li),
+        "DK": rgb(col(0.06, s_ * 0.6)),
+        "DLG": hx(dlg),
+        "MENU": hx(col(0.11, s_ * 0.6)),
+        # No son textos de la hoja de estilo: los usan el fondo, el brillo y los diálogos
+        "bg_bottom": bg_bottom,
+        "bg_glow": bg_glow,
+        "title_glow": col(0.60, s_),
+        "dlg_rgb": dlg,
+        "li_rgb": li,
     }
 
 
@@ -165,33 +193,33 @@ QLabel#muted { color: @MUTED@; font-size: 13px; }
 QFrame#card {
     background-color: rgba(@DK@, 175);
     border: 1px solid rgba(@LI@, 70);
-    border-radius: 24px;
+    border-radius: 30px;
 }
 
 QPushButton {
-    background-color: @ACCENT@; color: #ffffff; border: none; border-radius: 16px;
-    padding: 11px 24px; font-weight: @BOLD@;
+    background-color: @ACCENT@; color: @BTN_TEXT@; border: none; border-radius: 22px;
+    padding: 12px 28px; font-weight: @BOLD@;
 }
 QPushButton:hover { background-color: @ACCENT_HOVER@; }
 QPushButton:pressed { background-color: @ACCENT_PRESSED@; }
 QPushButton:disabled { background-color: @ACCENT_DISABLED@; color: @DIS_TEXT@; }
-QPushButton[variant="ghost"] { background-color: rgba(255, 255, 255, 18); color: @TEXT@; padding: 10px 18px; }
+QPushButton[variant="ghost"] { background-color: rgba(255, 255, 255, 18); color: @TEXT@; padding: 11px 22px; }
 QPushButton[variant="ghost"]:hover { background-color: rgba(255, 255, 255, 36); }
 QPushButton[variant="ghost"]:disabled { background-color: rgba(255, 255, 255, 8); color: @DIS_TEXT@; }
 QPushButton#play { padding: 13px 38px; font-size: 16px; }
 QPushButton#gear { background-color: rgba(255, 255, 255, 22); border-radius: 23px; padding: 0; font-size: 24px; }
 QPushButton#gear:hover { background-color: @ACCENT@; }
-QPushButton#more { background-color: rgba(255, 255, 255, 18); border-radius: 14px; padding: 0; font-size: 22px; }
+QPushButton#more { background-color: rgba(255, 255, 255, 18); border-radius: 19px; padding: 0; font-size: 22px; }
 QPushButton#more:hover { background-color: rgba(255, 255, 255, 40); }
 QPushButton#avatar {
     background-color: rgba(255, 255, 255, 22); border: 1px solid rgba(@LI@, 80);
-    border-radius: 18px; padding: 0;
+    border-radius: 28px; padding: 0;
 }
 QPushButton#avatar:hover { background-color: rgba(255, 255, 255, 44); }
 
 QPushButton#tile {
     background-color: rgba(@AC@, 55); border: 2px solid transparent;
-    border-radius: 18px; padding: 0; font-size: 26px; color: @TEXT@;
+    border-radius: 22px; padding: 0; font-size: 26px; color: @TEXT@;
 }
 QPushButton#tile:hover { background-color: rgba(@AC@, 115); }
 QPushButton#tile:checked { border: 2px solid @ACCENT_HOVER@; }
@@ -204,25 +232,26 @@ QProgressBar::chunk { background-color: @ACCENT@; border-radius: 4px; }
 
 QLineEdit, QDoubleSpinBox {
     background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
-    border-radius: 12px; padding: 8px 12px; selection-background-color: @ACCENT@;
+    border-radius: 16px; padding: 9px 14px; selection-background-color: @ACCENT@;
 }
 QLabel#value {
     background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
-    border-radius: 12px; padding: 8px 12px; font-weight: @BOLD@;
+    border-radius: 16px; padding: 9px 14px; font-weight: @BOLD@;
 }
 QSlider::groove:horizontal { height: 8px; background: rgba(255, 255, 255, 30); border-radius: 4px; }
 QSlider::sub-page:horizontal { background: @ACCENT@; border-radius: 4px; }
 QSlider::handle:horizontal { width: 22px; height: 22px; margin: -8px 0; border-radius: 11px; background: #ffffff; }
 
-QDialog, QMessageBox, QInputDialog { background-color: @DLG@; }
+QDialog { background: transparent; }
+QMessageBox, QInputDialog { background-color: @DLG@; }
 QPlainTextEdit {
-    background-color: #0a0612; border: 1px solid rgba(@LI@, 70); border-radius: 14px;
-    padding: 8px; font-family: Consolas, "Courier New", monospace; font-size: 12px;
+    background-color: #0a0612; border: 1px solid rgba(@LI@, 70); border-radius: 18px;
+    padding: 10px; font-family: Consolas, "Courier New", monospace; font-size: 12px;
 }
 QRadioButton { spacing: 10px; padding: 4px 0; }
 
-QMenu { background-color: @MENU@; border: 1px solid rgba(@LI@, 90); border-radius: 14px; padding: 8px; }
-QMenu::item { padding: 10px 22px 10px 12px; margin: 1px 0; border-radius: 10px; }
+QMenu { background-color: @MENU@; border: 1px solid rgba(@LI@, 90); border-radius: 20px; padding: 8px; }
+QMenu::item { padding: 10px 22px 10px 12px; margin: 1px 0; border-radius: 13px; }
 QMenu::icon { padding-left: 8px; }
 QMenu::separator { height: 1px; background: rgba(255, 255, 255, 28); margin: 6px 14px; }
 QMenu::item:selected { background-color: @ACCENT@; }
@@ -279,27 +308,85 @@ def load_fonts() -> tuple[str, bool]:
 
 
 class Background(QWidget):
-    """Fondo: degradado vertical, negro arriba y color del tema abajo."""
+    """Ventana sin marco, redondeada como una app de Apple: sombra suave y degradado vertical
+    (negro arriba, color del tema abajo)."""
 
+    MARGIN = 24          # espacio transparente alrededor, para la sombra
+    RADIUS = 32
     bg_bottom = (96, 30, 150)
     bg_glow = (150, 60, 220)
 
     def paintEvent(self, _event):
         p = QPainter(self)
-        w, h = self.width(), self.height()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        m, r = self.MARGIN, self.RADIUS
+        rect = QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m)
 
-        grad = QLinearGradient(0, 0, 0, h)
+        # sombra: anillos cada vez más transparentes
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for i in range(1, m - 3):
+            alpha = int(60 * (1 - i / (m - 3)) ** 2)
+            p.setPen(QPen(QColor(0, 0, 0, alpha), 1))
+            p.drawRoundedRect(rect.adjusted(-i, -i + 4, i, i + 4), r + i, r + i)
+
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, r, r)
+        p.setClipPath(clip)
+        grad = QLinearGradient(0, rect.top(), 0, rect.bottom())
         grad.setColorAt(0.0, QColor(0, 0, 0))
         grad.setColorAt(0.30, QColor(0, 0, 0))
         grad.setColorAt(1.0, QColor(*self.bg_bottom))
-        p.fillRect(self.rect(), grad)
+        p.fillRect(rect, grad)
 
         # brillo suave y simétrico en la parte baja
-        glow = QRadialGradient(w / 2, h * 1.05, w * 0.7)
+        glow = QRadialGradient(rect.center().x(), rect.bottom() + 20, rect.width() * 0.7)
         glow.setColorAt(0.0, QColor(*self.bg_glow, 80))
         glow.setColorAt(1.0, QColor(*self.bg_glow, 0))
-        p.fillRect(self.rect(), glow)
+        p.fillRect(rect, glow)
+
+        p.setClipping(False)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), r, r)
         p.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.windowHandle() is not None:
+            self.windowHandle().startSystemMove()          # arrastrar la ventana desde cualquier parte libre
+        super().mousePressEvent(event)
+
+
+class TrafficButton(QPushButton):
+    """Botón redondo de la esquina (rojo cierra, amarillo minimiza), como en macOS."""
+
+    def __init__(self, color: str, glyph: str):
+        super().__init__()
+        self._color, self._glyph = QColor(color), glyph
+        self.setFixedSize(16, 16)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(self._color)
+        p.drawEllipse(QRectF(0.5, 0.5, 15, 15))
+        if self.underMouse():
+            p.setPen(QPen(QColor(60, 20, 20, 200), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            if self._glyph == "x":
+                p.drawLine(5, 5, 11, 11)
+                p.drawLine(11, 5, 5, 11)
+            else:
+                p.drawLine(5, 8, 11, 8)
+        p.end()
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
 
 
 class TileButton(QPushButton):
@@ -326,7 +413,7 @@ class TileButton(QPushButton):
         rect = QRectF(self.rect())
         if gray:
             clip = QPainterPath()
-            clip.addRoundedRect(rect, 18, 18)
+            clip.addRoundedRect(rect, 22, 22)
             p.save()
             p.setClipPath(clip)
             gray_h = self.height() * (1.0 - self._progress)
@@ -335,7 +422,7 @@ class TileButton(QPushButton):
         if self.isChecked():                # el borde de selección siempre queda por encima
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.setPen(QPen(self.accent, 2))
-            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 17, 17)
+            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 21, 21)
         p.end()
 
 
@@ -368,7 +455,7 @@ def head_pixmap(skin_path: str, size: int) -> QPixmap | None:
     p = QPainter(face)
     p.drawImage(0, 0, hat)
     p.end()
-    return rounded_pixmap(QPixmap.fromImage(face), size, size // 4, smooth=False)
+    return rounded_pixmap(QPixmap.fromImage(face), size, size // 2, smooth=False)
 
 
 def silhouette_pixmap(size: int) -> QPixmap:
@@ -378,7 +465,7 @@ def silhouette_pixmap(size: int) -> QPixmap:
     p = QPainter(out)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     clip = QPainterPath()
-    clip.addRoundedRect(0, 0, size, size, size // 4, size // 4)
+    clip.addRoundedRect(0, 0, size, size, size // 2, size // 2)
     p.setClipPath(clip)
     p.fillPath(clip, QColor(255, 255, 255, 28))
     p.setPen(Qt.PenStyle.NoPen)
@@ -572,12 +659,14 @@ def parse_update(data) -> dict | None:
 
 
 def installed_with_installer() -> bool:
-    """True si el programa se instaló con CLIENT77K-setup.exe (junto al .exe está el desinstalador)."""
-    return is_frozen() and (Path(sys.executable).parent / "unins000.exe").exists()
+    """True si el programa se instaló con TOMATE77K-setup.exe (junto al .exe está el desinstalador)."""
+    folders = {Path(__file__).resolve().parent, Path(sys.argv[0]).resolve().parent}
+    return is_frozen() and any((d / "unins000.exe").exists() for d in folders)
 
 
 def is_frozen() -> bool:
-    return bool(getattr(sys, "frozen", False))
+    """True en el programa compilado (Nuitka marca __compiled__; PyInstaller marca sys.frozen)."""
+    return "__compiled__" in globals() or bool(getattr(sys, "frozen", False))
 
 
 def make_button(text: str, ghost: bool = False, name: str = "") -> QPushButton:
@@ -635,6 +724,82 @@ class FadeDialog(QDialog):
         super().hideEvent(event)
 
 
+class RoundedDialog(FadeDialog):
+    """Diálogo sin marco, con esquinas redondeadas y sombra, a juego con la ventana principal."""
+
+    MARGIN = 22
+    RADIUS = 28
+    surface = QColor(18, 10, 31, 245)       # los fija el tema
+    edge = QColor(170, 100, 255, 80)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def pad(self, left: int, top: int, right: int, bottom: int) -> tuple:
+        m = self.MARGIN
+        return (left + m, top + m, right + m, bottom + m)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        m, r = self.MARGIN, self.RADIUS
+        rect = QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for i in range(1, m - 3):
+            alpha = int(70 * (1 - i / (m - 3)) ** 2)
+            p.setPen(QPen(QColor(0, 0, 0, alpha), 1))
+            p.drawRoundedRect(rect.adjusted(-i, -i + 4, i, i + 4), r + i, r + i)
+        p.setPen(QPen(self.edge, 1))
+        p.setBrush(self.surface)
+        p.drawRoundedRect(rect, r, r)
+        p.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.windowHandle() is not None:
+            self.windowHandle().startSystemMove()
+        super().mousePressEvent(event)
+
+
+class MessageDialog(RoundedDialog):
+    def __init__(self, parent, title: str, text: str, yes: str = "Aceptar", no: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(460)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(*self.pad(30, 28, 30, 24))
+        lay.setSpacing(12)
+        head = QLabel(title)
+        head.setObjectName("head")
+        body = QLabel(text)
+        body.setWordWrap(True)
+        body.setObjectName("muted")
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        if no:
+            cancel = make_button(no, ghost=True)
+            cancel.clicked.connect(self.reject)
+            buttons.addWidget(cancel)
+        ok = make_button(yes)
+        ok.clicked.connect(self.accept)
+        ok.setDefault(True)
+        buttons.addWidget(ok)
+        lay.addWidget(head)
+        lay.addWidget(body)
+        lay.addSpacing(8)
+        lay.addLayout(buttons)
+
+
+def show_message(parent, title: str, text: str) -> None:
+    MessageDialog(parent, title, text).exec()
+
+
+def confirm(parent, title: str, text: str, yes: str = "Sí", no: str = "No") -> bool:
+    return MessageDialog(parent, title, text, yes, no).exec() == QDialog.DialogCode.Accepted
+
+
 ICON_FONTS = ("Segoe Fluent Icons", "Segoe MDL2 Assets")     # iconos que trae Windows 10/11
 
 
@@ -681,7 +846,7 @@ class Bus(QObject):
 
 
 # --------------------------------------------------------------------- diálogos
-class RamDialog(FadeDialog):
+class RamDialog(RoundedDialog):
     def __init__(self, parent, name: str, mb: int):
         super().__init__(parent)
         self.setWindowTitle("Memoria RAM")
@@ -689,7 +854,7 @@ class RamDialog(FadeDialog):
         self.setMinimumWidth(440)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 26, 28, 22)
+        lay.setContentsMargins(*self.pad(28, 26, 28, 22))
         lay.setSpacing(14)
 
         head = QLabel("Memoria RAM")
@@ -740,14 +905,14 @@ class RamDialog(FadeDialog):
         return int(round(self.slider.value() / 2 * 1024))
 
 
-class UpdateDialog(FadeDialog):
+class UpdateDialog(RoundedDialog):
     def __init__(self, parent, version: str):
         super().__init__(parent)
         self.setWindowTitle("Actualización")
         self.setModal(True)
         self.setMinimumWidth(400)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 26, 28, 24)
+        lay.setContentsMargins(*self.pad(28, 26, 28, 24))
         lay.setSpacing(14)
         head = QLabel(f"Actualizando a la versión {version}")
         head.setObjectName("head")
@@ -765,7 +930,77 @@ class UpdateDialog(FadeDialog):
         pass
 
 
-class AccountDialog(FadeDialog):
+class ThemeDialog(RoundedDialog):
+    """Personalización simple: paletas listas (neón, pastel y mate) y, si quieres, otro color."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle("Personalización")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        self.swatches: list = []
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(*self.pad(30, 28, 30, 24))
+        lay.setSpacing(10)
+        head = QLabel("Personalización")
+        head.setObjectName("head")
+        lay.addWidget(head)
+
+        for title, style, colors in PRESETS:
+            label = QLabel(title)
+            label.setObjectName("muted")
+            lay.addSpacing(6)
+            lay.addWidget(label)
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            for name, hex_color in colors:
+                btn = QPushButton()
+                btn.setFixedSize(40, 40)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setToolTip(name)
+                shade = make_palette(hex_color, style)["ACCENT"]
+                btn.setProperty("swatch", (hex_color, style, shade))
+                btn.clicked.connect(lambda _c=False, h=hex_color, st=style: self._pick(h, st))
+                self.swatches.append(btn)
+                row.addWidget(btn)
+            row.addStretch()
+            lay.addLayout(row)
+
+        buttons = QHBoxLayout()
+        other = make_button("Otro color…", ghost=True)
+        other.clicked.connect(self._other)
+        done = make_button("Listo")
+        done.clicked.connect(self.accept)
+        buttons.addWidget(other)
+        buttons.addStretch()
+        buttons.addWidget(done)
+        lay.addSpacing(12)
+        lay.addLayout(buttons)
+        self._refresh()
+
+    def _refresh(self):
+        cfg = self.main.cfg
+        for btn in self.swatches:
+            hex_color, style, shade = btn.property("swatch")
+            chosen = hex_color.lower() == cfg.get("theme", "").lower() and style == cfg.get("theme_style")
+            ring = "#ffffff" if chosen else "transparent"
+            btn.setStyleSheet(f"QPushButton {{ background-color: {shade}; border: 3px solid {ring};"
+                              f" border-radius: 20px; padding: 0; }}")
+
+    def _pick(self, hex_color: str, style: str):
+        self.main.set_theme(hex_color, style)
+        self._refresh()
+
+    def _other(self):
+        color = QColorDialog.getColor(QColor(self.main.cfg.get("theme", DEFAULT_THEME)), self, "Elige un color")
+        if color.isValid():
+            self.main.set_theme(color.name(), "vivid")
+            self._refresh()
+
+
+class AccountDialog(RoundedDialog):
     def __init__(self, main: "MainWindow"):
         super().__init__(main)
         self.main = main
@@ -774,7 +1009,7 @@ class AccountDialog(FadeDialog):
         self.setMinimumWidth(480)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 26, 28, 22)
+        lay.setContentsMargins(*self.pad(28, 26, 28, 22))
         lay.setSpacing(12)
 
         head = QLabel("Cuenta")
@@ -844,15 +1079,15 @@ class AccountDialog(FadeDialog):
         self.accept()
 
 
-class LogsDialog(FadeDialog):
+class LogsDialog(RoundedDialog):
     def __init__(self, main: "MainWindow"):
         super().__init__(main)
         self.main = main
         self.setWindowTitle("Logs")
-        self.resize(780, 500)
+        self.resize(830, 550)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(22, 20, 22, 18)
+        lay.setContentsMargins(*self.pad(22, 20, 22, 18))
         lay.setSpacing(12)
 
         self.view = QPlainTextEdit()
@@ -915,11 +1150,12 @@ class MainWindow(Background):
         icon_file = resource_path("icon.ico")
         if icon_file.exists():
             self.setWindowIcon(QIcon(str(icon_file)))
-        self.resize(900, 560)
-        self.setMinimumSize(760, 480)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(960 + 2 * self.MARGIN, 600 + 2 * self.MARGIN)
 
         self._build_ui()
-        self.apply_theme(self.cfg.get("theme", DEFAULT_THEME))
+        self.apply_theme(self.cfg.get("theme", DEFAULT_THEME), self.cfg.get("theme_style", "vivid"))
 
         self.bus.status.connect(self._on_status)
         self.bus.percent.connect(self._on_percent)
@@ -952,8 +1188,21 @@ class MainWindow(Background):
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(30, 20, 30, 26)
+        m = self.MARGIN
+        root.setContentsMargins(m + 32, m + 18, m + 32, m + 28)
         root.setSpacing(14)
+
+        # ---- botones redondos de la esquina (cerrar y minimizar), como en macOS
+        corner = QHBoxLayout()
+        corner.setSpacing(8)
+        btn_close = TrafficButton("#ff5f57", "x")
+        btn_min = TrafficButton("#febc2e", "-")
+        btn_close.clicked.connect(self.close)
+        btn_min.clicked.connect(self.showMinimized)
+        corner.addWidget(btn_close)
+        corner.addWidget(btn_min)
+        corner.addStretch()
+        root.addLayout(corner)
 
         # ---- barra superior: logo, nombre y la tuerca
         top = QHBoxLayout()
@@ -1074,7 +1323,7 @@ class MainWindow(Background):
         self.log_lines.append(line)
 
     def _show_error(self, title: str, message: str):
-        QMessageBox.critical(self, title, message)
+        show_message(self, title, message)
 
     def _apply_busy(self, busy: bool):
         self.busy = busy
@@ -1120,30 +1369,32 @@ class MainWindow(Background):
             self.installing = None
 
     # ------------------------------------------------------------ tema
-    def apply_theme(self, hex_color: str):
+    def apply_theme(self, hex_color: str, style: str = "vivid"):
         if not QColor(hex_color).isValid():
             hex_color = DEFAULT_THEME
-        pal = make_palette(QColor(hex_color).name())
+        pal = make_palette(QColor(hex_color).name(), style)
         TileButton.accent = QColor(pal["ACCENT_HOVER"])
+        RoundedDialog.surface = QColor(*pal["dlg_rgb"], 245)
+        RoundedDialog.edge = QColor(*pal["li_rgb"], 80)
         for tile in getattr(self, "tiles", {}).values():
             tile.update()
         self.bg_bottom = pal["bg_bottom"]
         self.bg_glow = pal["bg_glow"]
         self.title_glow.setColor(QColor(*pal["title_glow"], 210))
-        self.lbl_title.setText(f'<span style="font-size:40px;">{BRAND_NAME}</span>')
+        self.lbl_title.setText(f'<span style="font-size:36px;">{BRAND_NAME}</span>')
         QApplication.instance().setStyleSheet(build_qss(PIXEL_FONT, pal))
         self.update()
 
+    def set_theme(self, hex_color: str, style: str):
+        """Aplica y guarda el tema elegido."""
+        self.cfg["theme"] = QColor(hex_color).name()
+        self.cfg["theme_style"] = style
+        save_config(self.cfg)
+        self.apply_theme(self.cfg["theme"], style)
+
     def _open_theme(self):
-        original = self.cfg.get("theme", DEFAULT_THEME)
-        dlg = QColorDialog(QColor(original), self)
-        dlg.setWindowTitle("Personalización")
-        dlg.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
-        dlg.currentColorChanged.connect(lambda c: self.apply_theme(c.name()))   # vista previa en vivo
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.cfg["theme"] = dlg.currentColor().name()
-            save_config(self.cfg)
-        self.apply_theme(self.cfg.get("theme", DEFAULT_THEME))
+        dlg = ThemeDialog(self)
+        dlg.exec()
         dlg.deleteLater()
 
     # ------------------------------------------------------------ avatar
@@ -1190,7 +1441,7 @@ class MainWindow(Background):
     def _open_ram(self):
         iid = self.current
         if not iid:
-            QMessageBox.information(self, "Memoria RAM", "Elige una instancia primero.")
+            show_message(self, "Memoria RAM", "Elige una instancia primero.")
             return
         entry = self.catalog[iid]
         mb = self.cfg["ram"].get(iid, entry.get("ram_mb", DEFAULT_RAM_MB))
@@ -1431,11 +1682,9 @@ class MainWindow(Background):
             self.bus.status.emit("Esa instancia no está instalada")
             return
         name = self.catalog[iid]["name"]
-        answer = QMessageBox.question(
-            self, "Desinstalar instancia",
-            f"¿Desinstalar «{name}»?\n\nSe borrarán también sus mods, mundos y configuración.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if answer != QMessageBox.StandardButton.Yes:
+        if not confirm(self, "Desinstalar instancia",
+                       f"¿Desinstalar «{name}»?\n\nSe borrarán también sus mods, mundos y configuración.",
+                       yes="Desinstalar", no="Cancelar"):
             return
         game_dir = (INSTANCES_DIR / iid).resolve()
         if INSTANCES_DIR.resolve() in game_dir.parents:   # solo borra dentro de instances/
@@ -1459,7 +1708,7 @@ class MainWindow(Background):
             return
         iid = self.current
         if not iid:
-            QMessageBox.information(self, "Sin instancia", "Elige una instancia primero.")
+            show_message(self, "Sin instancia", "Elige una instancia primero.")
             return
         self.cfg["last_instance"] = iid
         save_config(self.cfg)
@@ -1485,6 +1734,7 @@ class MainWindow(Background):
         """Descarga e instala la instancia. Se ejecuta en un hilo de trabajo."""
         iid = entry["id"]
         self.installing = iid
+        started = time.time()
         cb = self._make_callback()
         game_dir = INSTANCES_DIR / iid
         tmp = DOWNLOADS_DIR / f"{iid}.mrpack"
@@ -1526,6 +1776,7 @@ class MainWindow(Background):
         self.cfg["installed"][iid] = record
         save_config(self.cfg)
         self.bus.percent.emit(100)
+        self.bus.log.emit(f"[{LAUNCHER_NAME}] Instalación de «{entry['name']}» terminada en {int(time.time() - started)} s")
         return record
 
     def _launch_worker(self, iid: str):
@@ -1610,7 +1861,7 @@ def run_pending_update() -> bool:
     bus = Bus()
     dlg = UpdateDialog(None, info["version"])
     result = {"error": ""}
-    setup = Path(tempfile.gettempdir()) / "CLIENT77K-setup.exe"
+    setup = Path(tempfile.gettempdir()) / "TOMATE77K-setup.exe"
     state = {"max": 1}
 
     def set_max(m):
@@ -1635,8 +1886,8 @@ def run_pending_update() -> bool:
     dlg.exec()
 
     if result["error"]:
-        QMessageBox.warning(None, "No se pudo actualizar",
-                            f"{result['error']}\n\nSe abrirá la versión actual.")
+        show_message(None, "No se pudo actualizar",
+                     f"{result['error']}\n\nSe abrirá la versión actual.")
         return False
     flags = 0x00000008 | 0x00000200 if sys.platform.startswith("win") else 0
     subprocess.Popen([str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NOCANCEL", "/CLOSEAPPLICATIONS"],
@@ -1647,8 +1898,6 @@ def run_pending_update() -> bool:
 def main():
     global PIXEL_FONT
     migrate_legacy_dir()
-    if is_frozen():                      # resto de una actualización anterior
-        Path(sys.executable).with_name(Path(sys.executable).name + ".old").unlink(missing_ok=True)
     app = QApplication(sys.argv)
     app.setApplicationName(LAUNCHER_NAME)
     family, pixel = load_fonts()
