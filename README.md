@@ -1,5 +1,9 @@
 # TOMATE77K
 
+> **Unofficial, independent project.** TOMATE77K is a third-party launcher made by Tomate77K. It is **not** affiliated with, endorsed or approved by Mojang Studios, Microsoft or Minecraft. "Minecraft" is a trademark of Mojang Studios.
+> **Proyecto independiente y no oficial.** TOMATE77K es un launcher de terceros hecho por Tomate77K. **No** está afiliado, respaldado ni aprobado por Mojang Studios, Microsoft ni Minecraft.
+> Contact / Contacto: open an [issue](../../issues) in this repository / abre un [issue](../../issues) en este repositorio.
+
 A small, non-commercial custom launcher for **Minecraft: Java Edition**, written in Python with [minecraft-launcher-lib](https://codeberg.org/JakobDev/minecraft-launcher-lib) and a Qt (PySide6) interface. It is made for personal use and a small group of friends.
 
 ## Features
@@ -7,9 +11,9 @@ A small, non-commercial custom launcher for **Minecraft: Java Edition**, written
 - Instances published by the author: the launcher reads a list (`instances.json`) from this repository and shows the available instances. Players pick one and press Play; it is downloaded, installed and updated automatically.
 - Downloads the game, the mod loader, the mods and the required Java runtime from their official sources (Mojang and Modrinth) and the modpack file from this repository's releases. No Minecraft files are distributed with this project.
 - Minimal UI: each instance is a rounded square with its logo (name on hover); a ⋯ menu offers refresh, open folder and uninstall.
-- Account button (shows the Steve head, or your skin's head when signed in with Microsoft): choose between online mode (Microsoft account) and offline mode (username only).
+- Account button (shows your skin's head once signed in): sign in or out with your Microsoft account. A Microsoft account that owns Minecraft: Java Edition is required to play; there is no offline or username-only mode.
 - Settings (gear icon): view the game logs and set the RAM of each instance in GB.
-- Only accounts that own Minecraft: Java Edition can sign in with Microsoft.
+- Ownership is verified through the normal Microsoft / Xbox / Minecraft sign-in flow. The launcher does not bypass or replace it.
 
 ## How the Microsoft sign-in works
 
@@ -54,9 +58,9 @@ Un launcher pequeño y sin fines de lucro para **Minecraft: Java Edition**, hech
 
 - Instancias publicadas por el autor: el launcher lee una lista (`instances.json`) de este repositorio y muestra las instancias disponibles. Quien lo use elige una y pulsa Jugar; se descarga, se instala y se actualiza sola.
 - Descarga el juego, el mod loader, los mods y Java desde sus fuentes oficiales (Mojang y Modrinth), y el archivo del modpack desde las releases de este repositorio. No se distribuyen archivos de Minecraft.
-- Botón Cuenta: permite elegir entre modo online (cuenta de Microsoft) y modo offline (solo nombre de usuario).
+- Botón Cuenta: iniciar o cerrar sesión con tu cuenta de Microsoft. Para jugar hace falta una cuenta con Minecraft: Java Edition; no existe modo offline ni entrar solo con un nombre.
 - Ajustes (tuerca): ver los logs del juego y cambiar la RAM de cada instancia en GB.
-- Solo pueden entrar con Microsoft las cuentas que tengan Minecraft: Java Edition.
+- La propiedad del juego se verifica con el inicio de sesión normal de Microsoft / Xbox / Minecraft. El launcher no lo evita ni lo reemplaza.
 
 ## Uso
 

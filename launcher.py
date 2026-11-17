@@ -60,7 +60,7 @@ SSL_CONTEXT = make_ssl_context()
 
 BRAND_NAME = "TOMATE77K"
 LAUNCHER_NAME = BRAND_NAME
-LAUNCHER_VERSION = "1.5"
+LAUNCHER_VERSION = "1.6"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -98,8 +98,6 @@ USER_AGENT = f"{BRAND_NAME}/{LAUNCHER_VERSION}"
 DEFAULT_SKIN_ACCOUNT = "MHF_Steve"
 
 DEFAULT_CONFIG = {
-    "username": "Jugador",      # nombre para el modo offline
-    "mode": "offline",          # "online" (cuenta Microsoft) u "offline"
     "installed": {},            # id -> datos de la instancia instalada
     "ram": {},                  # id -> RAM elegida por el usuario (en MB)
     "last_instance": None,
@@ -429,14 +427,6 @@ def migrate_legacy_dir() -> None:
             pass
 
 
-def offline_uuid(name: str) -> str:
-    """UUID de modo offline, igual al que genera el juego para un nombre."""
-    h = bytearray(hashlib.md5(f"OfflinePlayer:{name}".encode()).digest())
-    h[6] = (h[6] & 0x0F) | 0x30
-    h[8] = (h[8] & 0x3F) | 0x80
-    return str(uuid.UUID(bytes=bytes(h)))
-
-
 def load_config() -> dict:
     loaded: dict = {}
     if CONFIG_FILE.exists():
@@ -445,8 +435,8 @@ def load_config() -> dict:
         except json.JSONDecodeError:
             loaded = {}
     cfg = {**copy.deepcopy(DEFAULT_CONFIG), **loaded}
-    if "mode" not in loaded:   # configuraciones de versiones anteriores
-        cfg["mode"] = "online" if cfg.get("account") else "offline"
+    cfg.pop("mode", None)          # versiones anteriores tenían modo offline (ya no existe)
+    cfg.pop("username", None)
     return cfg
 
 
@@ -943,6 +933,8 @@ class ThemeDialog(RoundedDialog):
 
 
 class AccountDialog(RoundedDialog):
+    """Cuenta de Microsoft: hace falta una cuenta con Minecraft Java para jugar."""
+
     def __init__(self, main: "MainWindow"):
         super().__init__(main)
         self.main = main
@@ -954,12 +946,14 @@ class AccountDialog(RoundedDialog):
         lay.setContentsMargins(*self.pad(28, 26, 28, 22))
         lay.setSpacing(12)
 
-        head = QLabel("Cuenta")
+        head = QLabel("Cuenta de Microsoft")
         head.setObjectName("head")
-        self.rb_online = QRadioButton("Online · cuenta de Microsoft")
-        self.rb_offline = QRadioButton("Offline · solo nombre de usuario")
         self.lbl_acc = QLabel()
         self.lbl_acc.setObjectName("muted")
+        note = QLabel("Para jugar necesitas una cuenta de Microsoft que tenga Minecraft Java Edition. "
+                      "El inicio de sesión se hace en la página oficial de Microsoft.")
+        note.setObjectName("muted")
+        note.setWordWrap(True)
 
         acc_row = QHBoxLayout()
         self.btn_login = make_button("", ghost=True)
@@ -970,28 +964,16 @@ class AccountDialog(RoundedDialog):
         acc_row.addWidget(self.btn_logout)
         acc_row.addStretch()
 
-        user_lbl = QLabel("Nombre de usuario para el modo offline")
-        user_lbl.setObjectName("muted")
-        self.ed_user = QLineEdit(self.main.cfg.get("username", "Jugador"))
-        self.ed_user.setPlaceholderText("Jugador")
-
         buttons = QHBoxLayout()
-        cancel = make_button("Cancelar", ghost=True)
-        save = make_button("Guardar")
-        cancel.clicked.connect(self.reject)
-        save.clicked.connect(self._save)
+        close = make_button("Cerrar")
+        close.clicked.connect(self.accept)
         buttons.addStretch()
-        buttons.addWidget(cancel)
-        buttons.addWidget(save)
+        buttons.addWidget(close)
 
         lay.addWidget(head)
-        lay.addWidget(self.rb_online)
-        lay.addWidget(self.rb_offline)
         lay.addWidget(self.lbl_acc)
         lay.addLayout(acc_row)
-        lay.addSpacing(8)
-        lay.addWidget(user_lbl)
-        lay.addWidget(self.ed_user)
+        lay.addWidget(note)
         lay.addSpacing(8)
         lay.addLayout(buttons)
 
@@ -1000,25 +982,11 @@ class AccountDialog(RoundedDialog):
         self.refresh()
 
     def refresh(self, *_):
-        cfg = self.main.cfg
-        acc = cfg.get("account")
-        self.rb_online.setEnabled(bool(acc))
-        if acc and cfg.get("mode") == "online":
-            self.rb_online.setChecked(True)
-        else:
-            self.rb_offline.setChecked(True)
+        acc = self.main.cfg.get("account")
         self.lbl_acc.setText(f"Sesión iniciada: {acc['name']}" if acc else "Sin sesión de Microsoft")
         self.btn_login.setText("Cambiar cuenta" if acc else "Iniciar sesión con Microsoft")
         self.btn_login.setEnabled(not self.main.busy)
         self.btn_logout.setEnabled(bool(acc) and not self.main.busy)
-
-    def _save(self):
-        cfg = self.main.cfg
-        cfg["username"] = self.ed_user.text().strip() or "Jugador"
-        cfg["mode"] = "online" if (self.rb_online.isChecked() and cfg.get("account")) else "offline"
-        save_config(cfg)
-        self.main.bus.account.emit()      # actualiza el avatar
-        self.accept()
 
 
 class LogsDialog(RoundedDialog):
@@ -1325,7 +1293,7 @@ class MainWindow(Background):
         """Busca la skin: la de la cuenta Microsoft si hay sesión online, si no la de Steve."""
         try:
             acc = self.cfg.get("account")
-            if self.cfg.get("mode") == "online" and acc and acc.get("skin_url"):
+            if acc and acc.get("skin_url"):
                 path = CACHE_DIR / "skins" / f"{slugify(acc.get('id', 'cuenta'))}.png"
                 download_small(acc["skin_url"], path, host="textures.minecraft.net")
             else:
@@ -1340,10 +1308,10 @@ class MainWindow(Background):
             pix = silhouette_pixmap(44)
         self.btn_avatar.setIcon(QIcon(pix))
         acc = self.cfg.get("account")
-        if self.cfg.get("mode") == "online" and acc:
+        if acc:
             self.btn_avatar.setToolTip(f"Cuenta · {acc['name']}")
         else:
-            self.btn_avatar.setToolTip("Cuenta · modo offline")
+            self.btn_avatar.setToolTip("Cuenta · inicia sesión con Microsoft")
 
     # ------------------------------------------------------------ diálogos
     def _open_account(self):
@@ -1386,7 +1354,6 @@ class MainWindow(Background):
 
     def _logout(self):
         self.cfg["account"] = None
-        self.cfg["mode"] = "offline"
         save_config(self.cfg)
         self.bus.account.emit()
         self.bus.status.emit("Sesión cerrada")
@@ -1448,7 +1415,6 @@ class MainWindow(Background):
                 "refresh_token": data["refresh_token"],
                 "skin_url": pick_skin_url(data),
             }
-            self.cfg["mode"] = "online"
             save_config(self.cfg)
             bus.account.emit()
             bus.status.emit(f"Sesión iniciada como {data['name']}")
@@ -1459,10 +1425,10 @@ class MainWindow(Background):
             bus.busy.emit(False)
 
     def _refresh_account(self) -> dict | None:
-        """Renueva el token de la cuenta guardada. Devuelve la cuenta o None si es modo offline."""
+        """Renueva el token de la cuenta de Microsoft guardada."""
         acc = self.cfg.get("account")
-        if not acc or self.cfg.get("mode") != "online":
-            return None
+        if not acc:
+            raise RuntimeError("Inicia sesión con tu cuenta de Microsoft (toca tu avatar) para jugar.")
         data = mll.microsoft_account.complete_refresh(
             self._client_id(), None, REDIRECT_URI, acc["refresh_token"]
         )
@@ -1630,6 +1596,12 @@ class MainWindow(Background):
         if not iid:
             show_message(self, "Sin instancia", "Elige una instancia primero.")
             return
+        if not self.cfg.get("account"):
+            show_message(self, "Inicia sesión",
+                         "Para jugar necesitas iniciar sesión con tu cuenta de Microsoft "
+                         "(con Minecraft Java Edition).\n\nToca tu avatar, abajo a la derecha.")
+            self._open_account()
+            return
         self.cfg["last_instance"] = iid
         save_config(self.cfg)
         self._apply_busy(True)
@@ -1709,7 +1681,7 @@ class MainWindow(Background):
                 record = self._install(entry, is_update=record is not None)
                 bus.catalog.emit(iid)
 
-            # Cuenta Microsoft (renovando el token) o modo offline
+            # Cuenta de Microsoft (renovando el token)
             try:
                 account = self._refresh_account()
             except Exception as e:
@@ -1717,11 +1689,7 @@ class MainWindow(Background):
                     f"No se pudo renovar tu sesión de Microsoft ({type(e).__name__}). "
                     "Toca tu avatar, cierra sesión e inicia de nuevo."
                 ) from e
-            if account:
-                username, player_uuid, token = account["name"], account["id"], account["access_token"]
-            else:
-                username = self.cfg.get("username", "Jugador")
-                player_uuid, token = offline_uuid(username), ""
+            username, player_uuid, token = account["name"], account["id"], account["access_token"]
 
             ram = int(self.cfg["ram"].get(iid, entry.get("ram_mb", DEFAULT_RAM_MB)))
             options = {
