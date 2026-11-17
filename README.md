@@ -2,7 +2,7 @@
 
 > **Unofficial, independent project.** CLIENT77K is a third-party launcher made by Tomate77K. It is **not** affiliated with, endorsed or approved by Mojang Studios, Microsoft or Minecraft. "Minecraft" is a trademark of Mojang Studios.
 > **Proyecto independiente y no oficial.** CLIENT77K es un launcher de terceros hecho por Tomate77K. **No** está afiliado, respaldado ni aprobado por Mojang Studios, Microsoft ni Minecraft.
-> Contact / Contacto: open an [issue](../../issues) in this repository / abre un [issue](../../issues) en este repositorio.
+> Contact / Contacto: Discord **tomateklk** · or open an [issue](../../issues) / o abre un [issue](../../issues).
 
 A small, non-commercial custom launcher for **Minecraft: Java Edition**, written in Python with [minecraft-launcher-lib](https://codeberg.org/JakobDev/minecraft-launcher-lib) and a Qt (PySide6) interface. It is made for personal use and a small group of friends.
 
