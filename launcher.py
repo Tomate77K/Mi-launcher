@@ -37,7 +37,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QIcon
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient)
 from PySide6.QtWidgets import (QApplication, QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame,
                                QGraphicsDropShadowEffect, QHBoxLayout, QInputDialog, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
+                               QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
                                QPushButton, QRadioButton, QScrollArea, QSlider, QVBoxLayout,
                                QWidget)
 
@@ -61,7 +61,7 @@ SSL_CONTEXT = make_ssl_context()
 
 BRAND_NAME = "TOMATE77K"
 LAUNCHER_NAME = BRAND_NAME
-LAUNCHER_VERSION = "1.8"
+LAUNCHER_VERSION = "1.13"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -196,23 +196,25 @@ QFrame#card {
 }
 
 QPushButton {
-    background-color: @ACCENT@; color: @BTN_TEXT@; border: none; border-radius: 22px;
-    padding: 12px 28px; font-weight: @BOLD@;
+    background-color: @ACCENT@; color: @BTN_TEXT@; border: none; border-radius: 20px;
+    padding: 12px 28px; font-weight: @BOLD@; min-height: 20px;
 }
 QPushButton:hover { background-color: @ACCENT_HOVER@; }
 QPushButton:pressed { background-color: @ACCENT_PRESSED@; }
 QPushButton:disabled { background-color: @ACCENT_DISABLED@; color: @DIS_TEXT@; }
-QPushButton[variant="ghost"] { background-color: rgba(255, 255, 255, 18); color: @TEXT@; padding: 11px 22px; }
+QPushButton[variant="ghost"] { background-color: rgba(255, 255, 255, 18); color: @TEXT@; padding: 12px 26px;
+    border: none; border-radius: 20px; }
+QPushButton[variant="ghost"]:checked { background-color: @ACCENT@; color: @BTN_TEXT@; }
 QPushButton[variant="ghost"]:hover { background-color: rgba(255, 255, 255, 36); }
 QPushButton[variant="ghost"]:disabled { background-color: rgba(255, 255, 255, 8); color: @DIS_TEXT@; }
 QPushButton#play { padding: 13px 38px; font-size: 16px; }
-QPushButton#gear { background-color: rgba(255, 255, 255, 22); border-radius: 23px; padding: 0; font-size: 24px; }
+QPushButton#gear { background-color: rgba(255, 255, 255, 22); border-radius: 25px; padding: 0; font-size: 30px; }
 QPushButton#gear:hover { background-color: @ACCENT@; }
-QPushButton#more { background-color: rgba(255, 255, 255, 18); border-radius: 19px; padding: 0; font-size: 22px; }
+QPushButton#more { background-color: rgba(255, 255, 255, 18); border-radius: 17px; padding: 0; font-size: 22px; }
 QPushButton#more:hover { background-color: rgba(255, 255, 255, 40); }
 QPushButton#avatar {
     background-color: rgba(255, 255, 255, 22); border: 1px solid rgba(@LI@, 80);
-    border-radius: 28px; padding: 0;
+    border-radius: 20px; padding: 0;
 }
 QPushButton#avatar:hover { background-color: rgba(255, 255, 255, 44); }
 
@@ -233,6 +235,10 @@ QLineEdit, QDoubleSpinBox {
     background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
     border-radius: 16px; padding: 9px 14px; selection-background-color: @ACCENT@;
 }
+QListWidget { background: transparent; border: none; outline: none; color: @TEXT@; }
+QListWidget::item { border-radius: 18px; padding: 8px; margin: 3px; color: @TEXT@; }
+QListWidget::item:hover { background-color: rgba(255, 255, 255, 16); }
+QListWidget::item:selected { background-color: rgba(@AC@, 110); color: @TEXT@; }
 QComboBox {
     background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
     border-radius: 16px; padding: 9px 14px; color: @TEXT@;
@@ -395,7 +401,7 @@ def rounded_pixmap(src: QPixmap, size: int, radius: int, smooth: bool = True) ->
     return out
 
 
-def head_pixmap(skin_path: str, size: int) -> QPixmap | None:
+def head_pixmap(skin_path: str, size: int, radius: int | None = None) -> QPixmap | None:
     """Cabeza (cara + capa de sombrero) de un archivo de skin de Minecraft."""
     skin = QImage(skin_path)
     if skin.isNull() or skin.width() < 64 or skin.height() < 16:
@@ -406,7 +412,58 @@ def head_pixmap(skin_path: str, size: int) -> QPixmap | None:
     p = QPainter(face)
     p.drawImage(0, 0, hat)
     p.end()
-    return rounded_pixmap(QPixmap.fromImage(face), size, size // 2, smooth=False)
+    return rounded_pixmap(QPixmap.fromImage(face), size, size // 2 if radius is None else radius, smooth=False)
+
+
+def body_pixmap(skin_path: str, height: int, slim: bool = False) -> QPixmap | None:
+    """Skin de cuerpo entero, vista de frente (con las capas exteriores), dibujada pixel a pixel."""
+    skin = QImage(skin_path)
+    if skin.isNull() or skin.width() < 64 or skin.height() < 32:
+        return None
+    skin = skin.convertToFormat(QImage.Format.Format_ARGB32)
+    k = skin.width() // 64
+    modern = skin.height() >= 64 * k
+    aw = 3 if slim else 4
+    canvas = QImage(16 * k, 32 * k, QImage.Format.Format_ARGB32)
+    canvas.fill(0)
+    p = QPainter(canvas)
+
+    def part(sx, sy, w, h, dx, dy, mirror=False):
+        piece = skin.copy(sx * k, sy * k, w * k, h * k)
+        if mirror:
+            piece = piece.mirrored(True, False)
+        p.drawImage(dx * k, dy * k, piece)
+
+    part(8, 8, 8, 8, 4, 0)                                        # cabeza
+    part(20, 20, 8, 12, 4, 8)                                     # torso
+    part(44, 20, aw, 12, 4 - aw, 8)                               # brazo derecho (a la izquierda del dibujo)
+    part(4, 20, 4, 12, 4, 20)                                     # pierna derecha
+    if modern:
+        part(36, 52, aw, 12, 12, 8)                               # brazo izquierdo
+        part(20, 52, 4, 12, 8, 20)                                # pierna izquierda
+        part(40, 8, 8, 8, 4, 0)                                   # sombrero
+        part(20, 36, 8, 12, 4, 8)                                 # chaqueta
+        part(44, 36, aw, 12, 4 - aw, 8)                           # manga derecha
+        part(52, 52, aw, 12, 12, 8)                               # manga izquierda
+        part(4, 36, 4, 12, 4, 20)                                 # pantalón derecho
+        part(4, 52, 4, 12, 8, 20)                                 # pantalón izquierdo
+    else:                                                         # skins antiguas: izquierda = espejo
+        part(44, 20, aw, 12, 12, 8, mirror=True)
+        part(4, 20, 4, 12, 8, 20, mirror=True)
+        part(40, 8, 8, 8, 4, 0)
+    p.end()
+    pix = QPixmap.fromImage(canvas)
+    return pix.scaledToHeight(height, Qt.TransformationMode.FastTransformation)
+
+
+def cape_pixmap(cape_path: str, height: int) -> QPixmap | None:
+    """Parte de atrás de una capa (la que se ve), ampliada sin suavizar."""
+    img = QImage(cape_path)
+    if img.isNull() or img.width() < 64 or img.height() < 32:
+        return None
+    k = img.width() // 64
+    back = img.copy(1 * k, 1 * k, 10 * k, 16 * k)
+    return QPixmap.fromImage(back).scaledToHeight(height, Qt.TransformationMode.FastTransformation)
 
 
 def silhouette_pixmap(size: int) -> QPixmap:
@@ -416,7 +473,7 @@ def silhouette_pixmap(size: int) -> QPixmap:
     p = QPainter(out)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     clip = QPainterPath()
-    clip.addRoundedRect(0, 0, size, size, size // 2, size // 2)
+    clip.addRoundedRect(0, 0, size, size, size // 4, size // 4)
     p.setClipPath(clip)
     p.fillPath(clip, QColor(255, 255, 255, 28))
     p.setPen(Qt.PenStyle.NoPen)
@@ -494,6 +551,87 @@ def pick_skin_url(login_data: dict) -> str:
     active = [s for s in skins if str(s.get("state", "")).upper() == "ACTIVE"]
     chosen = (active or skins or [None])[0]
     return str(chosen.get("url", "")) if chosen else ""
+
+
+SKINS_DIR = APP_DIR / "skins"           # biblioteca de skins de cada cuenta
+_LIB_LOCK = threading.Lock()
+
+
+def lib_dir(acc_id: str) -> Path:
+    return SKINS_DIR / slugify(acc_id)
+
+
+def lib_load(acc_id: str) -> list[dict]:
+    """Skins guardadas de la cuenta: [{sha, name, variant, file}]."""
+    try:
+        data = json.loads((lib_dir(acc_id) / "index.json").read_text(encoding="utf-8"))
+        return [e for e in data if (lib_dir(acc_id) / e.get("file", "")).exists()]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def pixel_key(png: bytes) -> str:
+    """Huella de los píxeles de la imagen. Mojang vuelve a codificar los PNG, así que los bytes
+    de la skin subida y los de la descargada no coinciden aunque la imagen sea la misma."""
+    try:
+        img = QImage.fromData(png)
+        if not img.isNull():
+            img = img.convertToFormat(QImage.Format.Format_ARGB32)
+            raw = bytes(img.constBits())
+            return hashlib.sha1(f"{img.width()}x{img.height()}".encode() + raw).hexdigest()
+    except Exception:
+        pass
+    return hashlib.sha1(png).hexdigest()
+
+
+def lib_dedupe(acc_id: str) -> None:
+    """Quita de la biblioteca las skins repetidas (misma imagen), conservando la que tiene nombre propio."""
+    groups: dict = {}
+    for e in lib_load(acc_id):
+        try:
+            key = pixel_key((lib_dir(acc_id) / e["file"]).read_bytes())
+        except OSError:
+            continue
+        groups.setdefault(key, []).append(e)
+    for dup in groups.values():
+        if len(dup) > 1:
+            keep = next((e for e in dup if e.get("name") != "Skin original"), dup[0])
+            for e in dup:
+                if e is not keep:
+                    lib_remove(acc_id, e["sha"])
+
+
+def lib_add(acc_id: str, png: bytes, name: str, variant: str) -> bool:
+    """Guarda una skin en la biblioteca (si ya estaba, no se duplica). Devuelve True si era nueva."""
+    sha = pixel_key(png)
+    with _LIB_LOCK:
+        items = lib_load(acc_id)
+        for e in items:
+            try:
+                if e["sha"] == sha or pixel_key((lib_dir(acc_id) / e["file"]).read_bytes()) == sha:
+                    return False
+            except OSError:
+                continue
+        folder = lib_dir(acc_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        fname = f"{sha[:16]}.png"
+        (folder / fname).write_bytes(png)
+        items.append({"sha": sha, "name": (name or "Skin")[:40], "variant": variant, "file": fname})
+        (folder / "index.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        return True
+
+
+def lib_remove(acc_id: str, sha: str) -> None:
+    with _LIB_LOCK:
+        items = lib_load(acc_id)
+        keep = [e for e in items if e["sha"] != sha]
+        for e in items:
+            if e["sha"] == sha:
+                try:
+                    (lib_dir(acc_id) / e["file"]).unlink()
+                except OSError:
+                    pass
+        (lib_dir(acc_id) / "index.json").write_text(json.dumps(keep, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 MC_API = "https://api.minecraftservices.com"
@@ -977,33 +1115,48 @@ class ThemeDialog(RoundedDialog):
             self._refresh()
 
 
+def _list_widget(icon_w: int, icon_h: int, cell_w: int, cell_h: int) -> QListWidget:
+    lw = QListWidget()
+    lw.setViewMode(QListWidget.ViewMode.IconMode)
+    lw.setIconSize(QSize(icon_w, icon_h))
+    lw.setGridSize(QSize(cell_w, cell_h))
+    lw.setResizeMode(QListWidget.ResizeMode.Adjust)
+    lw.setMovement(QListWidget.Movement.Static)
+    lw.setWrapping(True)
+    lw.setWordWrap(True)
+    lw.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+    lw.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    lw.setFixedHeight(cell_h * 2 + 8)
+    lw.setFrameShape(QFrame.Shape.NoFrame)
+    return lw
+
+
 class CapeDialog(RoundedDialog):
     """Elegir entre las capas oficiales que ya tiene la cuenta (no se pueden añadir otras)."""
 
-    loaded = Signal(object, str)      # perfil, error
-    applied = Signal(str)             # "" = bien; si no, el error
+    loaded = Signal(object, object, str)      # perfil, {id: ruta de la imagen}, error
+    applied = Signal(str)                     # "" = bien; si no, el error
 
     def __init__(self, main: "MainWindow"):
         super().__init__(main)
         self.main = main
         self.setWindowTitle("Capas")
         self.setModal(True)
-        self.setMinimumWidth(460)
-        self.options: list[tuple[QRadioButton, str]] = []
+        self.setMinimumWidth(560)
 
-        self.lay = QVBoxLayout(self)
-        self.lay.setContentsMargins(*self.pad(28, 26, 28, 22))
-        self.lay.setSpacing(10)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(*self.pad(28, 26, 28, 22))
+        lay.setSpacing(10)
         head = QLabel("Capas")
         head.setObjectName("head")
         self.lbl = QLabel("Cargando tus capas…")
         self.lbl.setObjectName("muted")
         self.lbl.setWordWrap(True)
-        self.list_lay = QVBoxLayout()
-        self.list_lay.setSpacing(4)
+        self.grid = _list_widget(64, 104, 118, 168)
+        self.grid.hide()
 
         buttons = QHBoxLayout()
-        self.btn_apply = make_button("Aplicar")
+        self.btn_apply = make_button("Usar esta capa")
         self.btn_apply.setEnabled(False)
         close = make_button("Cerrar", ghost=True)
         close.clicked.connect(self.accept)
@@ -1012,11 +1165,11 @@ class CapeDialog(RoundedDialog):
         buttons.addWidget(close)
         buttons.addWidget(self.btn_apply)
 
-        self.lay.addWidget(head)
-        self.lay.addWidget(self.lbl)
-        self.lay.addLayout(self.list_lay)
-        self.lay.addSpacing(8)
-        self.lay.addLayout(buttons)
+        lay.addWidget(head)
+        lay.addWidget(self.lbl)
+        lay.addWidget(self.grid)
+        lay.addSpacing(8)
+        lay.addLayout(buttons)
 
         self.loaded.connect(self._on_loaded)
         self.applied.connect(self._on_applied)
@@ -1031,11 +1184,21 @@ class CapeDialog(RoundedDialog):
     def _load_worker(self):
         try:
             token = self.main._refresh_account()["access_token"]
-            self._emit(self.loaded, mc_api("GET", "/minecraft/profile", token), "")
+            profile = mc_api("GET", "/minecraft/profile", token)
+            paths: dict = {}
+            for cape in profile.get("capes") or []:
+                try:
+                    dest = CACHE_DIR / "capes" / f"{slugify(cape.get('id', 'capa'))}.png"
+                    if not dest.exists():
+                        download_small(str(cape.get("url", "")), dest, host="textures.minecraft.net")
+                    paths[str(cape.get("id", ""))] = str(dest)
+                except Exception:
+                    pass              # sin imagen: se muestra solo el nombre
+            self._emit(self.loaded, profile, paths, "")
         except Exception as e:
-            self._emit(self.loaded, None, f"{type(e).__name__}: {e}")
+            self._emit(self.loaded, None, {}, f"{type(e).__name__}: {e}")
 
-    def _on_loaded(self, profile, error: str):
+    def _on_loaded(self, profile, paths: dict, error: str):
         if error or profile is None:
             self.lbl.setText(f"No se pudieron cargar tus capas.\n{error}")
             return
@@ -1045,29 +1208,36 @@ class CapeDialog(RoundedDialog):
                              "(eventos, promociones, etc.); el launcher no puede añadirlas.")
             return
         self.lbl.setText("Elige la capa que quieres usar:")
-        none = QRadioButton("Sin capa")
-        self.list_lay.addWidget(none)
-        self.options.append((none, ""))
-        active_id = ""
+        self.grid.show()
+        self.grid.clear()
+        none = QListWidgetItem("Sin capa")
+        none.setData(Qt.ItemDataRole.UserRole, "")
+        none.setIcon(QIcon(silhouette_pixmap(64)))
+        self.grid.addItem(none)
+        active_item = none
         for cape in capes:
-            name = str(cape.get("alias") or cape.get("id", "Capa"))
-            radio = QRadioButton(name)
-            self.list_lay.addWidget(radio)
-            self.options.append((radio, str(cape.get("id", ""))))
-            if str(cape.get("state", "")).upper() == "ACTIVE":
-                active_id = str(cape.get("id", ""))
-        for radio, cid in self.options:
-            if cid == active_id:
-                radio.setChecked(True)
+            cid = str(cape.get("id", ""))
+            name = str(cape.get("alias") or "Capa")
+            active = str(cape.get("state", "")).upper() == "ACTIVE"
+            item = QListWidgetItem(("✓ " if active else "") + name)
+            item.setData(Qt.ItemDataRole.UserRole, cid)
+            pix = cape_pixmap(paths.get(cid, ""), 104) if cid in paths else None
+            if pix:
+                item.setIcon(QIcon(pix))
+            self.grid.addItem(item)
+            if active:
+                active_item = item
+        self.grid.setCurrentItem(active_item)
         self.btn_apply.setEnabled(True)
 
     def _apply(self):
-        chosen = next((cid for radio, cid in self.options if radio.isChecked()), None)
-        if chosen is None:
+        item = self.grid.currentItem()
+        if item is None:
             return
         self.btn_apply.setEnabled(False)
         self.lbl.setText("Aplicando…")
-        threading.Thread(target=self._apply_worker, args=(chosen,), daemon=True).start()
+        threading.Thread(target=self._apply_worker, args=(item.data(Qt.ItemDataRole.UserRole),),
+                         daemon=True).start()
 
     def _apply_worker(self, cape_id: str):
         try:
@@ -1087,6 +1257,191 @@ class CapeDialog(RoundedDialog):
             self.lbl.setText(f"No se pudo cambiar la capa.\n{error}")
         else:
             self.lbl.setText("Capa actualizada. Se verá la próxima vez que entres al juego.")
+
+
+class SkinNameDialog(RoundedDialog):
+    """Nombre y modelo de la skin que se va a subir."""
+
+    def __init__(self, parent, number: int):
+        super().__init__(parent)
+        self.setWindowTitle("Nueva skin")
+        self.setModal(True)
+        self.setMinimumWidth(400)
+        self._default = f"Skin {number}"
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(*self.pad(28, 26, 28, 22))
+        lay.setSpacing(14)
+        head = QLabel("Nueva skin")
+        head.setObjectName("head")
+        self.ed = QLineEdit()
+        self.ed.setPlaceholderText(f"Nombre (si lo dejas vacío: {self._default})")
+        self.ed.setMaxLength(24)
+
+        self.rb_classic = make_button("Clásico", ghost=True)
+        self.rb_slim = make_button("Slim", ghost=True)
+        for b in (self.rb_classic, self.rb_slim):
+            b.setCheckable(True)
+        self.rb_classic.setChecked(True)
+        self.rb_classic.clicked.connect(lambda: self.rb_slim.setChecked(False) or self.rb_classic.setChecked(True))
+        self.rb_slim.clicked.connect(lambda: self.rb_classic.setChecked(False) or self.rb_slim.setChecked(True))
+        models = QHBoxLayout()
+        models.addWidget(self.rb_classic)
+        models.addWidget(self.rb_slim)
+        models.addStretch()
+
+        cancel = make_button("Cancelar", ghost=True)
+        ok = make_button("Subir")
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        ok.setDefault(True)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(cancel)
+        buttons.addWidget(ok)
+
+        lay.addWidget(head)
+        lay.addWidget(self.ed)
+        lay.addLayout(models)
+        lay.addSpacing(4)
+        lay.addLayout(buttons)
+
+    def name(self) -> str:
+        return self.ed.text().strip() or self._default
+
+    def variant(self) -> str:
+        return "slim" if self.rb_slim.isChecked() else "classic"
+
+
+class SkinsDialog(RoundedDialog):
+    """Biblioteca de skins de la cuenta: guarda la que tenías y las que vas subiendo."""
+
+    refreshed = Signal()
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.acc_id = (main.cfg.get("account") or {}).get("id", "")
+        self.setWindowTitle("Skins")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(*self.pad(28, 26, 28, 22))
+        lay.setSpacing(10)
+        head = QLabel("Skins")
+        head.setObjectName("head")
+        self.grid = _list_widget(64, 128, 118, 176)
+
+        self.btn_new = make_button("+ Subir", ghost=True)
+        self.btn_use = make_button("Usar")
+        self.btn_del = make_button("Quitar", ghost=True)
+        self.btn_new.clicked.connect(self._new)
+        self.btn_use.clicked.connect(self._use)
+        self.btn_del.clicked.connect(self._remove)
+        row = QHBoxLayout()
+        row.addWidget(self.btn_new)
+        row.addWidget(self.btn_del)
+        row.addStretch()
+        row.addWidget(self.btn_use)
+        close = make_button("Cerrar", ghost=True)
+        close.clicked.connect(self.accept)
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        bottom.addWidget(close)
+
+        lay.addWidget(head)
+        lay.addWidget(self.grid)
+        lay.addLayout(row)
+        lay.addSpacing(4)
+        lay.addLayout(bottom)
+
+        lib_dedupe(self.acc_id)
+        self.refreshed.connect(self._fill)
+        self.main.bus.account.connect(self._on_account)
+        self.main.bus.busy.connect(self._on_busy)
+        self._fill()
+        threading.Thread(target=self._save_current_worker, daemon=True).start()
+
+    def _emit_refresh(self):
+        try:
+            self.refreshed.emit()
+        except RuntimeError:
+            pass
+
+    def _save_current_worker(self):
+        """Guarda en la biblioteca la skin que la cuenta tiene puesta ahora (si aún no estaba)."""
+        try:
+            token = self.main._refresh_account()["access_token"]
+            profile = mc_api("GET", "/minecraft/profile", token)
+            skins = profile.get("skins") or []
+            active = ([k for k in skins if str(k.get("state", "")).upper() == "ACTIVE"] or skins or [None])[0]
+            if not active or not active.get("url"):
+                return
+            tmp = CACHE_DIR / "skins" / f"{slugify(self.acc_id)}_actual.png"
+            download_small(str(active["url"]), tmp, host="textures.minecraft.net")
+            variant = "slim" if str(active.get("variant", "")).upper() == "SLIM" else "classic"
+            if lib_add(self.acc_id, tmp.read_bytes(), "Skin original", variant):
+                self._emit_refresh()
+        except Exception:
+            pass
+
+    def _fill(self):
+        self.grid.clear()
+        items = lib_load(self.acc_id)
+        current = (self.main.cfg.get("account") or {}).get("skin_url", "")
+        for e in items:
+            path = str(lib_dir(self.acc_id) / e["file"])
+            pix = body_pixmap(path, 128, slim=e.get("variant") == "slim")
+            item = QListWidgetItem(e.get("name", "Skin"))
+            item.setData(Qt.ItemDataRole.UserRole, e)
+            if pix:
+                item.setIcon(QIcon(pix))
+            self.grid.addItem(item)
+        if self.grid.count():
+            self.grid.setCurrentRow(0)
+        self.btn_use.setEnabled(bool(items) and not self.main.busy)
+        self.btn_del.setEnabled(bool(items))
+
+    def _on_account(self):
+        self._fill()
+
+    def _on_busy(self, *_):
+        self.btn_new.setEnabled(not self.main.busy)
+        self.btn_use.setEnabled(self.grid.count() > 0 and not self.main.busy)
+
+    def _new(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Elige tu skin (PNG)", str(Path.home()), "Imagen PNG (*.png)")
+        if not path:
+            return
+        img = QImage(path)
+        if img.isNull() or (img.width(), img.height()) not in ((64, 64), (64, 32)):
+            show_message(self, "Skin no válida", "La skin debe ser un PNG de 64×64 o 64×32 píxeles.")
+            return
+        dlg = SkinNameDialog(self, len(lib_load(self.acc_id)) + 1)
+        ok = dlg.exec() == QDialog.DialogCode.Accepted
+        name, variant = dlg.name(), dlg.variant()
+        dlg.deleteLater()
+        if ok:
+            self.main._upload_skin(path, variant, name=name)
+
+    def _use(self):
+        item = self.grid.currentItem()
+        if item is None:
+            return
+        e = item.data(Qt.ItemDataRole.UserRole)
+        self.main._upload_skin(str(lib_dir(self.acc_id) / e["file"]), e.get("variant", "classic"), name=e.get("name", ""))
+
+    def _remove(self):
+        item = self.grid.currentItem()
+        if item is None:
+            return
+        e = item.data(Qt.ItemDataRole.UserRole)
+        if confirm(self, "Quitar de la biblioteca",
+                   f"¿Quitar «{e.get('name', 'Skin')}» de tu biblioteca?\n\nNo cambia la skin que tienes puesta en Minecraft.",
+                   yes="Quitar", no="Cancelar"):
+            lib_remove(self.acc_id, e["sha"])
+            self._fill()
 
 
 class AccountDialog(RoundedDialog):
@@ -1128,25 +1483,16 @@ class AccountDialog(RoundedDialog):
         look_lay.setSpacing(10)
         look_head = QLabel("Apariencia")
         look_head.setObjectName("muted")
-        self.cb_model = QComboBox()
-        self.cb_model.addItem("Modelo clásico (brazos anchos)", "classic")
-        self.cb_model.addItem("Modelo slim (brazos finos)", "slim")
-        self.btn_skin = make_button("Subir skin…", ghost=True)
+        self.btn_skin = make_button("Skins…", ghost=True)
         self.btn_capes = make_button("Capas…", ghost=True)
-        self.btn_skin.clicked.connect(self._upload_skin)
+        self.btn_skin.clicked.connect(self._open_skins)
         self.btn_capes.clicked.connect(self._open_capes)
         look_row = QHBoxLayout()
         look_row.addWidget(self.btn_skin)
         look_row.addWidget(self.btn_capes)
         look_row.addStretch()
-        hint = QLabel("La skin debe ser un PNG de 64×64 (o 64×32). Solo se pueden elegir capas oficiales "
-                      "que ya tenga tu cuenta.")
-        hint.setObjectName("muted")
-        hint.setWordWrap(True)
         look_lay.addWidget(look_head)
-        look_lay.addWidget(self.cb_model)
         look_lay.addLayout(look_row)
-        look_lay.addWidget(hint)
 
         buttons = QHBoxLayout()
         close = make_button("Cerrar")
@@ -1179,10 +1525,10 @@ class AccountDialog(RoundedDialog):
         self.btn_skin.setEnabled(not busy)
         self.btn_capes.setEnabled(not busy)
 
-    def _upload_skin(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Elige tu skin (PNG)", str(Path.home()), "Imagen PNG (*.png)")
-        if path:
-            self.main._upload_skin(path, self.cb_model.currentData())
+    def _open_skins(self):
+        dlg = SkinsDialog(self.main)
+        dlg.exec()
+        dlg.deleteLater()
 
     def _open_capes(self):
         dlg = CapeDialog(self.main)
@@ -1261,7 +1607,8 @@ class MainWindow(Background):
         icon_file = resource_path("icon.ico")
         if icon_file.exists():
             self.setWindowIcon(QIcon(str(icon_file)))
-        self.setFixedSize(960, 600)                # marco normal de Windows (icono, minimizar y cerrar)
+        self.setMinimumSize(760, 500)              # marco normal de Windows: se puede agrandar, achicar y maximizar
+        self.resize(960, 600)
 
         self._build_ui()
         self.apply_theme(self.cfg.get("theme", DEFAULT_THEME), self.cfg.get("theme_style", "vivid"))
@@ -1312,7 +1659,7 @@ class MainWindow(Background):
         title.setGraphicsEffect(self.title_glow)
 
         self.btn_gear = make_button("⚙", name="gear")
-        self.btn_gear.setFixedSize(46, 46)
+        self.btn_gear.setFixedSize(58, 58)
         self.btn_gear.clicked.connect(self._show_gear_menu)
 
         # nombre a la izquierda, alineado con la columna de instancias; la tuerca a la derecha,
@@ -1362,8 +1709,8 @@ class MainWindow(Background):
         self.btn_play.clicked.connect(self._play)
 
         self.btn_avatar = make_button("", name="avatar")
-        self.btn_avatar.setFixedSize(56, 56)
-        self.btn_avatar.setIconSize(QSize(44, 44))
+        self.btn_avatar.setFixedSize(64, 64)
+        self.btn_avatar.setIconSize(QSize(52, 52))
         self.btn_avatar.clicked.connect(self._open_account)
 
         bottom.addStretch(1)
@@ -1504,9 +1851,9 @@ class MainWindow(Background):
             self.bus.avatar.emit("")
 
     def _set_avatar(self, path: str):
-        pix = head_pixmap(path, 44) if path else None
+        pix = head_pixmap(path, 52, radius=14) if path else None
         if pix is None:
-            pix = silhouette_pixmap(44)
+            pix = silhouette_pixmap(52)
         self.btn_avatar.setIcon(QIcon(pix))
         acc = self.cfg.get("account")
         if acc:
@@ -1553,7 +1900,7 @@ class MainWindow(Background):
             save_config(self.cfg)
         return self.cfg.get("client_id", "")
 
-    def _upload_skin(self, path: str, variant: str):
+    def _upload_skin(self, path: str, variant: str, name: str = ""):
         """Sube una skin PNG a la cuenta del jugador (API oficial de Minecraft)."""
         if self.busy:
             return
@@ -1568,9 +1915,9 @@ class MainWindow(Background):
             return
         self._apply_busy(True)
         self.bus.status.emit("Subiendo tu skin…")
-        threading.Thread(target=self._skin_worker, args=(png, variant), daemon=True).start()
+        threading.Thread(target=self._skin_worker, args=(png, variant, name or Path(path).stem), daemon=True).start()
 
-    def _skin_worker(self, png: bytes, variant: str):
+    def _skin_worker(self, png: bytes, variant: str, name: str):
         bus = self.bus
         try:
             token = self._refresh_account()["access_token"]
@@ -1580,6 +1927,7 @@ class MainWindow(Background):
             if url:
                 self.cfg["account"]["skin_url"] = url
                 save_config(self.cfg)
+            lib_add(self.cfg["account"]["id"], png, name, variant)        # queda en tu biblioteca
             bus.account.emit()                       # recarga el avatar
             bus.status.emit("Skin actualizada")
         except Exception as e:
