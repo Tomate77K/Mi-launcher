@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 import webbrowser
@@ -34,7 +35,7 @@ from PySide6.QtCore import (QEasingCurve, QObject, QParallelAnimationGroup, QPoi
                             QRectF, QSize, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QImage,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient)
-from PySide6.QtWidgets import (QApplication, QColorDialog, QDialog, QDoubleSpinBox, QFrame,
+from PySide6.QtWidgets import (QApplication, QColorDialog, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame,
                                QGraphicsDropShadowEffect, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
                                QPushButton, QRadioButton, QScrollArea, QSlider, QVBoxLayout,
@@ -60,7 +61,7 @@ SSL_CONTEXT = make_ssl_context()
 
 BRAND_NAME = "TOMATE77K"
 LAUNCHER_NAME = BRAND_NAME
-LAUNCHER_VERSION = "1.6"
+LAUNCHER_VERSION = "1.8"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -231,6 +232,16 @@ QProgressBar::chunk { background-color: @ACCENT@; border-radius: 4px; }
 QLineEdit, QDoubleSpinBox {
     background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
     border-radius: 16px; padding: 9px 14px; selection-background-color: @ACCENT@;
+}
+QComboBox {
+    background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
+    border-radius: 16px; padding: 9px 14px; color: @TEXT@;
+}
+QComboBox::drop-down { border: none; width: 28px; }
+QComboBox QAbstractItemView {
+    background-color: @MENU@; color: @TEXT@; border: 1px solid rgba(@LI@, 90);
+    border-radius: 12px; padding: 6px; outline: none; selection-background-color: @ACCENT@;
+    selection-color: @BTN_TEXT@;
 }
 QLabel#value {
     background-color: rgba(255, 255, 255, 18); border: 1px solid rgba(@LI@, 70);
@@ -483,6 +494,40 @@ def pick_skin_url(login_data: dict) -> str:
     active = [s for s in skins if str(s.get("state", "")).upper() == "ACTIVE"]
     chosen = (active or skins or [None])[0]
     return str(chosen.get("url", "")) if chosen else ""
+
+
+MC_API = "https://api.minecraftservices.com"
+
+
+def mc_api(method: str, path: str, token: str, body: bytes | None = None,
+           content_type: str = "application/json", timeout: int = 30) -> dict:
+    """Llama a la API de perfil de Minecraft con el token de la cuenta del propio jugador."""
+    headers = {"User-Agent": USER_AGENT, "Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = content_type
+    req = urllib.request.Request(MC_API + path, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as resp:
+            raw = resp.read().decode("utf-8") or "{}"
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = json.loads(e.read().decode("utf-8")).get("errorMessage", "")
+        except Exception:
+            pass
+        raise RuntimeError(f"Minecraft respondió {e.code}. {detail}".strip()) from e
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+
+def skin_multipart(variant: str, png: bytes) -> tuple[bytes, str]:
+    boundary = uuid.uuid4().hex
+    head = (f'--{boundary}\r\nContent-Disposition: form-data; name="variant"\r\n\r\n{variant}\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="skin.png"\r\n'
+            f'Content-Type: image/png\r\n\r\n').encode()
+    return head + png + f"\r\n--{boundary}--\r\n".encode(), f"multipart/form-data; boundary={boundary}"
 
 
 def fetch_json(url: str, timeout: int = 15):
@@ -932,15 +977,127 @@ class ThemeDialog(RoundedDialog):
             self._refresh()
 
 
+class CapeDialog(RoundedDialog):
+    """Elegir entre las capas oficiales que ya tiene la cuenta (no se pueden añadir otras)."""
+
+    loaded = Signal(object, str)      # perfil, error
+    applied = Signal(str)             # "" = bien; si no, el error
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle("Capas")
+        self.setModal(True)
+        self.setMinimumWidth(460)
+        self.options: list[tuple[QRadioButton, str]] = []
+
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(*self.pad(28, 26, 28, 22))
+        self.lay.setSpacing(10)
+        head = QLabel("Capas")
+        head.setObjectName("head")
+        self.lbl = QLabel("Cargando tus capas…")
+        self.lbl.setObjectName("muted")
+        self.lbl.setWordWrap(True)
+        self.list_lay = QVBoxLayout()
+        self.list_lay.setSpacing(4)
+
+        buttons = QHBoxLayout()
+        self.btn_apply = make_button("Aplicar")
+        self.btn_apply.setEnabled(False)
+        close = make_button("Cerrar", ghost=True)
+        close.clicked.connect(self.accept)
+        self.btn_apply.clicked.connect(self._apply)
+        buttons.addStretch()
+        buttons.addWidget(close)
+        buttons.addWidget(self.btn_apply)
+
+        self.lay.addWidget(head)
+        self.lay.addWidget(self.lbl)
+        self.lay.addLayout(self.list_lay)
+        self.lay.addSpacing(8)
+        self.lay.addLayout(buttons)
+
+        self.loaded.connect(self._on_loaded)
+        self.applied.connect(self._on_applied)
+        threading.Thread(target=self._load_worker, daemon=True).start()
+
+    def _emit(self, signal, *args):
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            pass                      # el diálogo ya se cerró
+
+    def _load_worker(self):
+        try:
+            token = self.main._refresh_account()["access_token"]
+            self._emit(self.loaded, mc_api("GET", "/minecraft/profile", token), "")
+        except Exception as e:
+            self._emit(self.loaded, None, f"{type(e).__name__}: {e}")
+
+    def _on_loaded(self, profile, error: str):
+        if error or profile is None:
+            self.lbl.setText(f"No se pudieron cargar tus capas.\n{error}")
+            return
+        capes = profile.get("capes") or []
+        if not capes:
+            self.lbl.setText("Tu cuenta no tiene capas oficiales. Las capas las entrega Mojang "
+                             "(eventos, promociones, etc.); el launcher no puede añadirlas.")
+            return
+        self.lbl.setText("Elige la capa que quieres usar:")
+        none = QRadioButton("Sin capa")
+        self.list_lay.addWidget(none)
+        self.options.append((none, ""))
+        active_id = ""
+        for cape in capes:
+            name = str(cape.get("alias") or cape.get("id", "Capa"))
+            radio = QRadioButton(name)
+            self.list_lay.addWidget(radio)
+            self.options.append((radio, str(cape.get("id", ""))))
+            if str(cape.get("state", "")).upper() == "ACTIVE":
+                active_id = str(cape.get("id", ""))
+        for radio, cid in self.options:
+            if cid == active_id:
+                radio.setChecked(True)
+        self.btn_apply.setEnabled(True)
+
+    def _apply(self):
+        chosen = next((cid for radio, cid in self.options if radio.isChecked()), None)
+        if chosen is None:
+            return
+        self.btn_apply.setEnabled(False)
+        self.lbl.setText("Aplicando…")
+        threading.Thread(target=self._apply_worker, args=(chosen,), daemon=True).start()
+
+    def _apply_worker(self, cape_id: str):
+        try:
+            token = self.main._refresh_account()["access_token"]
+            if cape_id:
+                mc_api("PUT", "/minecraft/profile/capes/active", token,
+                       json.dumps({"capeId": cape_id}).encode("utf-8"))
+            else:
+                mc_api("DELETE", "/minecraft/profile/capes/active", token)
+            self._emit(self.applied, "")
+        except Exception as e:
+            self._emit(self.applied, f"{type(e).__name__}: {e}")
+
+    def _on_applied(self, error: str):
+        self.btn_apply.setEnabled(True)
+        if error:
+            self.lbl.setText(f"No se pudo cambiar la capa.\n{error}")
+        else:
+            self.lbl.setText("Capa actualizada. Se verá la próxima vez que entres al juego.")
+
+
 class AccountDialog(RoundedDialog):
-    """Cuenta de Microsoft: hace falta una cuenta con Minecraft Java para jugar."""
+    """Cuenta de Microsoft (hace falta Minecraft Java para jugar) y apariencia: skin y capa."""
 
     def __init__(self, main: "MainWindow"):
         super().__init__(main)
         self.main = main
         self.setWindowTitle("Cuenta")
         self.setModal(True)
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(500)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(*self.pad(28, 26, 28, 22))
@@ -950,19 +1107,46 @@ class AccountDialog(RoundedDialog):
         head.setObjectName("head")
         self.lbl_acc = QLabel()
         self.lbl_acc.setObjectName("muted")
-        note = QLabel("Para jugar necesitas una cuenta de Microsoft que tenga Minecraft Java Edition. "
-                      "El inicio de sesión se hace en la página oficial de Microsoft.")
-        note.setObjectName("muted")
-        note.setWordWrap(True)
+        self.note = QLabel("Para jugar necesitas una cuenta de Microsoft que tenga Minecraft Java Edition. "
+                           "El inicio de sesión se hace en la página oficial de Microsoft.")
+        self.note.setObjectName("muted")
+        self.note.setWordWrap(True)
 
-        acc_row = QHBoxLayout()
-        self.btn_login = make_button("", ghost=True)
+        self.btn_login = make_button("Iniciar sesión con Microsoft", ghost=True)
         self.btn_logout = make_button("Cerrar sesión", ghost=True)
         self.btn_login.clicked.connect(self.main._login_microsoft)
         self.btn_logout.clicked.connect(self.main._logout)
+        acc_row = QHBoxLayout()
         acc_row.addWidget(self.btn_login)
         acc_row.addWidget(self.btn_logout)
         acc_row.addStretch()
+
+        # ---- apariencia (solo con sesión iniciada)
+        self.look = QWidget()
+        look_lay = QVBoxLayout(self.look)
+        look_lay.setContentsMargins(0, 6, 0, 0)
+        look_lay.setSpacing(10)
+        look_head = QLabel("Apariencia")
+        look_head.setObjectName("muted")
+        self.cb_model = QComboBox()
+        self.cb_model.addItem("Modelo clásico (brazos anchos)", "classic")
+        self.cb_model.addItem("Modelo slim (brazos finos)", "slim")
+        self.btn_skin = make_button("Subir skin…", ghost=True)
+        self.btn_capes = make_button("Capas…", ghost=True)
+        self.btn_skin.clicked.connect(self._upload_skin)
+        self.btn_capes.clicked.connect(self._open_capes)
+        look_row = QHBoxLayout()
+        look_row.addWidget(self.btn_skin)
+        look_row.addWidget(self.btn_capes)
+        look_row.addStretch()
+        hint = QLabel("La skin debe ser un PNG de 64×64 (o 64×32). Solo se pueden elegir capas oficiales "
+                      "que ya tenga tu cuenta.")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        look_lay.addWidget(look_head)
+        look_lay.addWidget(self.cb_model)
+        look_lay.addLayout(look_row)
+        look_lay.addWidget(hint)
 
         buttons = QHBoxLayout()
         close = make_button("Cerrar")
@@ -973,7 +1157,8 @@ class AccountDialog(RoundedDialog):
         lay.addWidget(head)
         lay.addWidget(self.lbl_acc)
         lay.addLayout(acc_row)
-        lay.addWidget(note)
+        lay.addWidget(self.note)
+        lay.addWidget(self.look)
         lay.addSpacing(8)
         lay.addLayout(buttons)
 
@@ -983,10 +1168,26 @@ class AccountDialog(RoundedDialog):
 
     def refresh(self, *_):
         acc = self.main.cfg.get("account")
+        busy = self.main.busy
         self.lbl_acc.setText(f"Sesión iniciada: {acc['name']}" if acc else "Sin sesión de Microsoft")
-        self.btn_login.setText("Cambiar cuenta" if acc else "Iniciar sesión con Microsoft")
-        self.btn_login.setEnabled(not self.main.busy)
-        self.btn_logout.setEnabled(bool(acc) and not self.main.busy)
+        self.btn_login.setVisible(not acc)            # con sesión no hay «cambiar de cuenta»
+        self.btn_logout.setVisible(bool(acc))
+        self.note.setVisible(not acc)
+        self.look.setVisible(bool(acc))
+        self.btn_login.setEnabled(not busy)
+        self.btn_logout.setEnabled(not busy)
+        self.btn_skin.setEnabled(not busy)
+        self.btn_capes.setEnabled(not busy)
+
+    def _upload_skin(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Elige tu skin (PNG)", str(Path.home()), "Imagen PNG (*.png)")
+        if path:
+            self.main._upload_skin(path, self.cb_model.currentData())
+
+    def _open_capes(self):
+        dlg = CapeDialog(self.main)
+        dlg.exec()
+        dlg.deleteLater()
 
 
 class LogsDialog(RoundedDialog):
@@ -1352,6 +1553,41 @@ class MainWindow(Background):
             save_config(self.cfg)
         return self.cfg.get("client_id", "")
 
+    def _upload_skin(self, path: str, variant: str):
+        """Sube una skin PNG a la cuenta del jugador (API oficial de Minecraft)."""
+        if self.busy:
+            return
+        img = QImage(path)
+        if img.isNull() or (img.width(), img.height()) not in ((64, 64), (64, 32)):
+            show_message(self, "Skin no válida", "La skin debe ser un PNG de 64×64 o 64×32 píxeles.")
+            return
+        try:
+            png = Path(path).read_bytes()
+        except OSError as e:
+            show_message(self, "No se pudo leer el archivo", str(e))
+            return
+        self._apply_busy(True)
+        self.bus.status.emit("Subiendo tu skin…")
+        threading.Thread(target=self._skin_worker, args=(png, variant), daemon=True).start()
+
+    def _skin_worker(self, png: bytes, variant: str):
+        bus = self.bus
+        try:
+            token = self._refresh_account()["access_token"]
+            body, ctype = skin_multipart(variant, png)
+            profile = mc_api("POST", "/minecraft/profile/skins", token, body, ctype, timeout=60)
+            url = pick_skin_url(profile)
+            if url:
+                self.cfg["account"]["skin_url"] = url
+                save_config(self.cfg)
+            bus.account.emit()                       # recarga el avatar
+            bus.status.emit("Skin actualizada")
+        except Exception as e:
+            bus.error.emit("No se pudo subir la skin", f"{type(e).__name__}: {e}")
+            bus.status.emit("Error al subir la skin")
+        finally:
+            bus.busy.emit(False)
+
     def _logout(self):
         self.cfg["account"] = None
         save_config(self.cfg)
@@ -1372,6 +1608,8 @@ class MainWindow(Background):
         bus = self.bus
         try:
             login_url, state, verifier = mll.microsoft_account.get_secure_login_data(client_id, REDIRECT_URI)
+            if "prompt=" not in login_url:     # que Microsoft deje elegir otra cuenta en vez de reusar la del navegador
+                login_url += ("&" if "?" in login_url else "?") + "prompt=select_account"
 
             captured: dict = {}
 
