@@ -61,7 +61,7 @@ SSL_CONTEXT = make_ssl_context()
 
 BRAND_NAME = "TOMATE77K"
 LAUNCHER_NAME = BRAND_NAME
-LAUNCHER_VERSION = "1.13"
+LAUNCHER_VERSION = "1.14"
 
 # Actualizaciones del propio launcher: un archivo latest.json en el repositorio (ver README).
 UPDATE_URL = "https://raw.githubusercontent.com/Tomate77K/Mi-launcher/main/latest.json"
@@ -784,10 +784,60 @@ def is_frozen() -> bool:
     return "__compiled__" in globals() or bool(getattr(sys, "frozen", False))
 
 
+class PillButton(QPushButton):
+    """Botón secundario dibujado a mano: siempre es una píldora perfecta (o un círculo si es cuadrado).
+    Las hojas de estilo de Qt no redondeaban bien estos botones, así que se pintan directamente."""
+
+    accent = QColor(139, 47, 224)
+    text_color = QColor(243, 235, 255)
+    on_accent = QColor(255, 255, 255)
+
+    def __init__(self, text: str = "", hover_accent: bool = False):
+        super().__init__(text)
+        self.hover_accent = hover_accent
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:
+        fm = self.fontMetrics()
+        return QSize(fm.horizontalAdvance(self.text()) + 54, max(46, fm.height() + 26))
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.isEnabled():
+            fill = QColor(255, 255, 255, 8)
+        elif self.isChecked():
+            fill = self.accent
+        elif self.isDown():
+            fill = QColor(255, 255, 255, 60)
+        elif self.underMouse():
+            fill = self.accent if self.hover_accent else QColor(255, 255, 255, 40)
+        else:
+            fill = QColor(255, 255, 255, 20)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
+        p.setBrush(fill)
+        radius = min(rect.width(), rect.height()) / 2
+        p.drawRoundedRect(rect, radius, radius)
+        if not self.isEnabled():
+            p.setPen(QColor(255, 255, 255, 90))
+        elif self.isChecked() or (self.hover_accent and self.underMouse()):
+            p.setPen(self.on_accent)
+        else:
+            p.setPen(self.text_color)
+        p.setFont(self.font())
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+        p.end()
+
+
 def make_button(text: str, ghost: bool = False, name: str = "") -> QPushButton:
+    if ghost or name in ("gear", "more"):
+        btn: QPushButton = PillButton(text, hover_accent=(name == "gear"))
+        if name:
+            btn.setObjectName(name)
+        return btn
     btn = QPushButton(text)
-    if ghost:
-        btn.setProperty("variant", "ghost")
     if name:
         btn.setObjectName(name)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1102,7 +1152,7 @@ class ThemeDialog(RoundedDialog):
             chosen = hex_color.lower() == cfg.get("theme", "").lower() and style == cfg.get("theme_style")
             ring = "#ffffff" if chosen else "transparent"
             btn.setStyleSheet(f"QPushButton {{ background-color: {shade}; border: 3px solid {ring};"
-                              f" border-radius: 20px; padding: 0; }}")
+                              f" border-radius: 18px; padding: 0; }}")
 
     def _pick(self, hex_color: str, style: str):
         self.main.set_theme(hex_color, style)
@@ -1709,8 +1759,8 @@ class MainWindow(Background):
         self.btn_play.clicked.connect(self._play)
 
         self.btn_avatar = make_button("", name="avatar")
-        self.btn_avatar.setFixedSize(64, 64)
-        self.btn_avatar.setIconSize(QSize(52, 52))
+        self.btn_avatar.setFixedSize(72, 72)
+        self.btn_avatar.setIconSize(QSize(60, 60))
         self.btn_avatar.clicked.connect(self._open_account)
 
         bottom.addStretch(1)
@@ -1810,6 +1860,9 @@ class MainWindow(Background):
             hex_color = DEFAULT_THEME
         pal = make_palette(QColor(hex_color).name(), style)
         TileButton.accent = QColor(pal["ACCENT_HOVER"])
+        PillButton.accent = QColor(pal["ACCENT"])
+        PillButton.text_color = QColor(pal["TEXT"])
+        PillButton.on_accent = QColor(pal["BTN_TEXT"])
         RoundedDialog.surface = QColor(*pal["dlg_rgb"], 245)
         RoundedDialog.edge = QColor(*pal["li_rgb"], 80)
         for tile in getattr(self, "tiles", {}).values():
@@ -1851,9 +1904,9 @@ class MainWindow(Background):
             self.bus.avatar.emit("")
 
     def _set_avatar(self, path: str):
-        pix = head_pixmap(path, 52, radius=14) if path else None
+        pix = head_pixmap(path, 60, radius=16) if path else None
         if pix is None:
-            pix = silhouette_pixmap(52)
+            pix = silhouette_pixmap(60)
         self.btn_avatar.setIcon(QIcon(pix))
         acc = self.cfg.get("account")
         if acc:
