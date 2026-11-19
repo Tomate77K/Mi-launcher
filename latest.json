@@ -1,7 +1,7 @@
 {
-  "version": "1.8",
-  "url": "https://github.com/Tomate77K/Mi-launcher/releases/download/app-1.8/TOMATE77K-setup.exe",
+  "version": "1.13",
+  "url": "https://github.com/Tomate77K/Mi-launcher/releases/download/app-1.13/TOMATE77K-setup.exe",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-  "installer_url": "https://github.com/Tomate77K/Mi-launcher/releases/download/app-1.8/TOMATE77K-setup.exe",
-  "installer_sha256": "f404ecaee7fa2c0a59483e9bfdf95eb8e037844fd6b123e37c192573863b9af1"
+  "installer_url": "https://github.com/Tomate77K/Mi-launcher/releases/download/app-1.13/TOMATE77K-setup.exe",
+  "installer_sha256": "20af6f316189cd567bcc0662c8de48bf95f588e32815253a3420b80e0fe57103"
 }
